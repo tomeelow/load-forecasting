@@ -1,0 +1,51 @@
+# Pipeline parameters. Secrets live in .env, never here.
+
+data:
+  country_code: PL                # ENTSO-E bidding-zone / country code
+  start_date: "2019-01-01"        # inclusive, interpreted in timezone_local
+  end_date: null                  # null = up to the current hour
+  timezone_local: Europe/Warsaw   # display + the calendar holidays are defined on
+  raw_dir: data/raw
+  processed_dir: data/processed
+  dataset_filename: dataset.parquet
+
+ingestion:
+  # ENTSO-E revises "actual" load after first publication and some hours publish
+  # late, so each incremental run re-pulls this many days and overwrites them.
+  trailing_repull_days: 14
+  # ENTSO-E load is often 15-minute resolution. Values are instantaneous MW, so the
+  # mean over the hour is the hourly average power — sum would be nonsense.
+  load_aggregation: mean
+  weather_forecast_days: 7        # horizon requested from the Open-Meteo forecast API
+
+weather:
+  archive_url: https://archive-api.open-meteo.com/v1/archive
+  forecast_url: https://api.open-meteo.com/v1/forecast
+  variables:
+    - temperature_2m
+    - wind_speed_10m
+    - cloud_cover
+    - relative_humidity_2m
+  # Population weights, normalised at load time. Combined into a single national
+  # series — demand follows where people are, not where the weather station is.
+  cities:
+    - {name: Warsaw,   lat: 52.23, lon: 21.01, weight: 0.30}
+    - {name: Krakow,   lat: 50.06, lon: 19.94, weight: 0.16}
+    - {name: Lodz,     lat: 51.76, lon: 19.46, weight: 0.12}
+    - {name: Wroclaw,  lat: 51.11, lon: 17.04, weight: 0.12}
+    - {name: Poznan,   lat: 52.41, lon: 16.93, weight: 0.11}
+    - {name: Gdansk,   lat: 54.35, lon: 18.65, weight: 0.10}
+    - {name: Szczecin, lat: 53.43, lon: 14.55, weight: 0.09}
+
+features:
+  horizon_hours: 24               # forecast load_mw[t + horizon_hours]
+  rolling_window_hours: 24        # window for rolling stats, applied to an already-shifted series
+  weekly_lag_hours: 168           # same hour last week — safe at any day-ahead horizon
+
+validation:
+  # Polish system load sits roughly in this band; anything outside is a data fault,
+  # not a demand record.
+  load_min_mw: 10000
+  load_max_mw: 28000
+  temp_min_c: -35.0
+  temp_max_c: 45.0
