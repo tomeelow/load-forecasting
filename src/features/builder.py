@@ -129,7 +129,13 @@ def make_features(
     f[f"load_roll_mean_{rolling_window}"] = base.rolling(rolling_window).mean()
     f[f"load_roll_std_{rolling_window}"] = base.rolling(rolling_window).std()
 
-    # --- Weather --- observed in training, forecast at serving; see README on the skew.
+    # --- Weather ---
+    # Aligned to `t`, not to the target hour `t + horizon`, following the plan. Weather
+    # at the target hour is also legal (it comes from the forecast API, which is exactly
+    # what serving has) and is probably the stronger feature, since demand responds to
+    # the weather it is in. Changing it changes the feature schema, so it is flagged
+    # rather than done. Either way these are observed values in training and forecast
+    # values at serving — see the README on that skew.
     f["temp_c"] = df["temp_c"]
     f["temp_sq"] = df["temp_c"] ** 2
     f["wind_ms"] = df["wind_ms"]
