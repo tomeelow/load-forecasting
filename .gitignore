@@ -15,7 +15,10 @@ mlflow.db
 
 # Monitoring and evaluation output
 monitoring/reports/
-reports/
+# Evaluation output: the generated benchmark tables are deliverables and are
+# versioned; the prediction dumps behind them are not.
+reports/*
+!reports/*.md
 
 # Secrets
 .env

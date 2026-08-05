@@ -62,8 +62,10 @@ model:
   early_stopping_rounds: 100
   quantiles: [0.1, 0.5, 0.9]      # P10/P50/P90 band
   tuning:
-    n_trials: 30
-    timeout_s: 900
+    # The search is a budget, not a guarantee. `timeout_s` bounds it so a backtest,
+    # which tunes once and then refits at every origin, stays re-runnable.
+    n_trials: 20
+    timeout_s: 300
 
 promotion:
   metric: mape

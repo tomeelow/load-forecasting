@@ -39,6 +39,7 @@ def run(cfg: Config, horizon: int, *, max_splits: int | None = None, tune: bool 
         inner_validation_days=cfg.model.validation_days,
         tune=tune,
         n_trials=cfg.model.tuning.n_trials,
+        tuning_timeout_s=cfg.model.tuning.timeout_s,
         quantiles=tuple(cfg.model.quantiles) if cfg.backtest.quantiles else (),
         seed=cfg.model.seed,
         num_boost_round=cfg.model.num_boost_round,
