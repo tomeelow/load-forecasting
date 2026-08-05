@@ -95,9 +95,11 @@ def make_features(
     Set `include_target=False` at serving time, where the target does not exist yet;
     the trailing rows then survive instead of being dropped for want of a future value.
 
-    Calendar fields are derived from the UTC index, following the plan. The holiday
-    flag is the exception: a public holiday is defined on the Europe/Warsaw calendar
-    date, so 23:00 UTC on 24 December is already Christmas Day in Poland.
+    Calendar fields are derived from the **Europe/Warsaw local** timestamp, not from
+    UTC. Demand follows human behaviour and humans follow the local clock: the morning
+    ramp is at 07:00 in Warsaw all year, which is 06:00 UTC in winter and 05:00 UTC in
+    summer. Deriving `hour` from UTC would smear that ramp across two values and make
+    the model relearn the DST offset twice a year. The index itself stays UTC.
     """
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
@@ -107,10 +109,12 @@ def make_features(
     f = pd.DataFrame(index=df.index)
 
     # --- Calendar: known arbitrarily far in advance, so no leakage risk at all ---
-    f["hour"] = df.index.hour
-    f["dow"] = df.index.dayofweek
-    f["month"] = df.index.month
-    f["is_weekend"] = (df.index.dayofweek >= 5).astype(int)
+    # Computed on the local clock people actually live by, not on UTC.
+    local = df.index.tz_convert(tz)
+    f["hour"] = local.hour
+    f["dow"] = local.dayofweek
+    f["month"] = local.month
+    f["is_weekend"] = (local.dayofweek >= 5).astype(int)
     f["is_holiday"] = is_holiday(df.index, tz).astype(int)
 
     # Cyclical encoding, so the model sees hour 23 as adjacent to hour 0.

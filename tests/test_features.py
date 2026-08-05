@@ -27,14 +27,23 @@ def test_leading_rows_without_enough_history_are_dropped(short_dataset):
     assert features.index.max() == short_dataset.index.max() - pd.Timedelta(hours=24)
 
 
-def test_calendar_features_match_the_timestamp(short_dataset):
+def test_calendar_features_are_the_warsaw_clock_not_utc(short_dataset):
     features = make_features(short_dataset, 24)
-    row = pd.Timestamp("2024-01-20 15:00", tz="UTC")  # a Saturday
+    row = pd.Timestamp("2024-01-20 15:00", tz="UTC")  # a Saturday, 16:00 in Warsaw
 
-    assert features.loc[row, "hour"] == 15
+    assert features.loc[row, "hour"] == 16  # not 15: demand follows the local clock
     assert features.loc[row, "dow"] == 5
     assert features.loc[row, "month"] == 1
     assert features.loc[row, "is_weekend"] == 1
+
+
+def test_the_local_day_boundary_is_what_flips_the_weekend_flag(short_dataset):
+    features = make_features(short_dataset, 24)
+
+    # 23:00 UTC on Sunday is already Monday 00:00 in Warsaw, so the weekend is over.
+    assert features.loc[pd.Timestamp("2024-01-21 22:00", tz="UTC"), "is_weekend"] == 1
+    assert features.loc[pd.Timestamp("2024-01-21 23:00", tz="UTC"), "is_weekend"] == 0
+    assert features.loc[pd.Timestamp("2024-01-21 23:00", tz="UTC"), "dow"] == 0
 
 
 def test_cyclical_encodings_wrap_around(short_dataset):
