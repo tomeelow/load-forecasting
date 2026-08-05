@@ -7,14 +7,19 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "entsoe-py==0.8.0",
     "holidays==0.102",
+    "lightgbm==4.7.0",
     "loguru==0.7.3",
-    "numpy==2.5.1",
-    "pandas==3.0.5",
+    "matplotlib==3.11.1",
+    "mlflow==3.15.1",
+    "numpy==2.4.6",
+    "optuna==4.9.0",
+    "pandas==2.3.3",
     "pandera==0.32.1",
-    "pyarrow==25.0.0",
+    "pyarrow==23.0.1",
     "python-dotenv==1.2.2",
     "pyyaml==6.0.3",
     "requests==2.34.2",
+    "scikit-learn==1.9.0",
 ]
 
 [build-system]
