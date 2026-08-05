@@ -45,6 +45,7 @@ DEFAULT_ROLLING_WINDOW = 24
 DEFAULT_WEEKLY_LAG = 168
 
 REQUIRED_COLUMNS = ("load_mw", "temp_c", "wind_ms", "cloud_cover")
+WEATHER_FEATURE_COLUMNS = ("temp_c", "temp_sq", "wind_ms", "cloud_cover")
 
 
 def lag_hours(horizon: int, weekly_lag: int = DEFAULT_WEEKLY_LAG) -> list[int]:
@@ -176,6 +177,26 @@ def make_features(
         len(f) - len(built),
     )
     return built
+
+
+def feature_columns(
+    columns: list[str], *, include_weather: bool = True, include_lags: bool = True
+) -> list[str]:
+    """Select a feature subset by family, preserving order and excluding the target.
+
+    The benchmark table compares a calendar-only model against one that also sees the
+    weather, so "which columns" has to be a parameter rather than a second builder.
+    """
+    selected = []
+    for column in columns:
+        if column == TARGET_COLUMN:
+            continue
+        is_lag = LAG_COLUMN_PATTERN.match(column) or ROLLING_COLUMN_PATTERN.match(column)
+        is_weather = column in WEATHER_FEATURE_COLUMNS
+        if (is_lag and not include_lags) or (is_weather and not include_weather):
+            continue
+        selected.append(column)
+    return selected
 
 
 def target_derived_columns(columns: list[str]) -> list[str]:
