@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from src import synthetic
 from src.ingestion.dataset import (
     CANONICAL_COLUMNS,
     build_dataset,
@@ -12,7 +13,6 @@ from src.ingestion.dataset import (
     read_dataset,
     write_dataset,
 )
-from tests.fixtures import synthetic
 
 WARSAW = "Europe/Warsaw"
 
