@@ -27,6 +27,8 @@ packages = ["src", "pipelines"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# ruff formats Python code blocks inside Markdown; docs/ holds the spec, leave it alone.
+extend-exclude = ["*.md", "notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N", "ANN"]
