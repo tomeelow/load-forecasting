@@ -11,10 +11,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src import synthetic
 from src.features.builder import make_features
 from src.ingestion.dataset import build_dataset
 from src.ingestion.entsoe_client import to_utc_hourly
-from tests.fixtures import synthetic
 
 WARSAW = "Europe/Warsaw"
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from src import synthetic
 from src.ingestion.validate import DatasetValidationError, validate_dataset
-from tests.fixtures import synthetic
 
 
 @pytest.fixture

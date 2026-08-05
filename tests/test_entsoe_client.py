@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from entsoe.exceptions import NoMatchingDataError
 
+from src import synthetic
 from src.ingestion.entsoe_client import (
     FORECAST_COLUMN,
     LOAD_COLUMN,
@@ -16,7 +17,6 @@ from src.ingestion.entsoe_client import (
     to_utc_hourly,
     trailing_window,
 )
-from tests.fixtures import synthetic
 
 WARSAW = "Europe/Warsaw"
 

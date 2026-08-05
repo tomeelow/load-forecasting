@@ -13,9 +13,9 @@ import pandas as pd
 import pytest
 
 from pipelines import ingest
+from src import synthetic
 from src.ingestion.dataset import read_dataset
 from src.ingestion.entsoe_client import FORECAST_COLUMN, LOAD_COLUMN
-from tests.fixtures import synthetic
 
 WEATHER_COLUMNS = ["temp_c", "wind_ms", "cloud_cover", "humidity_pct"]
 

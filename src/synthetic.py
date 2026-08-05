@@ -1,4 +1,10 @@
-"""A synthetic Polish load series, so the test suite needs no API token and no network.
+"""A synthetic Polish load series, so nothing here needs an API token or a network.
+
+This is a supported component, not a test helper. The ENTSO-E token takes days to
+arrive, and until it does this generator is what lets the whole pipeline — features,
+training, tracking, backtest — run end to end. Anything trained on it is marked
+`synthetic` in MLflow, because a metric from invented data is a plumbing check and
+not a result. The test suite uses it as its fixture for the same reason.
 
 The shape matters more than the realism: the tests below assert things about lags,
 DST and validation, and a series without a daily double peak or a weekend dip cannot

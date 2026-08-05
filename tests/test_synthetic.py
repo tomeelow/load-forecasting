@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from src import synthetic
 from src.ingestion.dataset import CANONICAL_COLUMNS
-from tests.fixtures import synthetic
 
 WARSAW = "Europe/Warsaw"
 

@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src import synthetic
 from src.features.builder import TARGET_COLUMN, make_features
-from tests.fixtures import synthetic
 
 WARSAW = "Europe/Warsaw"
 

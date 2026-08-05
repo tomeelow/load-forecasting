@@ -8,8 +8,8 @@ from __future__ import annotations
 import pytest
 import requests
 
+from src import synthetic
 from src.config import Config, load_config
-from tests.fixtures import synthetic
 
 
 @pytest.fixture(autouse=True)
