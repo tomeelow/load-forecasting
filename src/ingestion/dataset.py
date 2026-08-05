@@ -9,14 +9,20 @@ builder are also time shifts.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 from loguru import logger
 
 from src.calendar_pl import DEFAULT_TZ, is_holiday
 from src.ingestion.entsoe_client import FORECAST_COLUMN, LOAD_COLUMN
+
+if TYPE_CHECKING:
+    from src.config import Config
 
 WEATHER_COLUMNS = ["temp_c", "wind_ms", "cloud_cover", "humidity_pct"]
 CANONICAL_COLUMNS = [
@@ -127,3 +133,59 @@ def read_dataset(path: Path) -> pd.DataFrame:
     df = pd.read_parquet(path)
     _require_utc(df, f"dataset at {path}")
     return df
+
+
+def dataset_fingerprint(df: pd.DataFrame) -> str:
+    """A short content hash of the dataset, for provenance on every training run.
+
+    Content-addressed rather than a filename or a timestamp: ENTSO-E revises published
+    actuals, so "the dataset" changes underneath a fixed path. Without this, a metric
+    that moved between two runs cannot be attributed to the model or to the data.
+    Stands in for the DVC hash until DVC is wired up.
+    """
+    digest = sha256(pd.util.hash_pandas_object(df, index=True).to_numpy().tobytes())
+    return digest.hexdigest()[:12]
+
+
+@dataclass(frozen=True)
+class TrainingData:
+    """A frame to train on, plus where it came from."""
+
+    frame: pd.DataFrame
+    version: str
+    synthetic: bool
+
+    @property
+    def description(self) -> str:
+        origin = "synthetic" if self.synthetic else "ingested"
+        return f"{origin}:{self.version}"
+
+
+def load_training_frame(cfg: Config) -> TrainingData:
+    """The ingested dataset if one exists, otherwise the synthetic generator.
+
+    The ENTSO-E token takes days to arrive. Rather than blocking the whole pipeline on
+    it, training falls back to invented data and says so loudly — every run built this
+    way is tagged `synthetic` in MLflow, because metrics from invented data measure the
+    plumbing and nothing else.
+    """
+    from src import synthetic
+
+    path = cfg.data.dataset_path
+    if path.exists():
+        frame = read_dataset(path)
+        logger.info("Training on the ingested dataset: {} rows from {}", len(frame), path)
+        return TrainingData(frame, dataset_fingerprint(frame), synthetic=False)
+
+    frame = synthetic.make_dataset(
+        start=cfg.data.synthetic_start, end=cfg.data.synthetic_end, seed=cfg.model.seed
+    )
+    logger.warning(
+        "No dataset at {} — falling back to SYNTHETIC data ({} rows, {} to {}). "
+        "Every metric from this run measures the pipeline, not Polish demand.",
+        path,
+        len(frame),
+        frame.index.min().date(),
+        frame.index.max().date(),
+    )
+    return TrainingData(frame, dataset_fingerprint(frame), synthetic=True)
