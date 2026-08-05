@@ -84,6 +84,12 @@ uv run pre-commit install
 cp .env.example .env   # then paste your ENTSO-E token into ENTSOE_API_KEY
 ```
 
+On macOS, LightGBM needs the OpenMP runtime, which is not a Python package:
+
+```bash
+brew install libomp
+```
+
 Run the test suite (no network and no `.env` required — the suite runs against a
 synthetic Polish load series):
 
