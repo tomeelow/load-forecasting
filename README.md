@@ -111,6 +111,31 @@ The second form re-pulls only a trailing window (`ingestion.trailing_repull_days
 config) and merges it over the existing dataset, because ENTSO-E revises "actual"
 values after first publication.
 
+Train the baselines and every LightGBM variant, log them to MLflow and run the
+promotion gate:
+
+```bash
+uv run python -m pipelines.train
+```
+
+Produce the benchmark table from a rolling-origin backtest (takes ~20 minutes: each
+origin is a full refit of every variant — use `--max-splits 3` for a quick check):
+
+```bash
+uv run python -m pipelines.backtest
+```
+
+Browse the tracked runs, the registered model and the champion alias:
+
+```bash
+uv run mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db
+```
+
+Without an `ENTSOE_API_KEY`, both pipelines fall back to the synthetic generator in
+[src/synthetic.py](src/synthetic.py) so the loop runs end to end. Those runs are named
+`*_synthetic`, tagged `data_source=synthetic` in MLflow, and their reports carry a
+warning banner — a metric from invented data measures the plumbing, nothing else.
+
 **TODO** — `docker compose up` for the full stack (Phase 10).
 
 ## Screenshot
