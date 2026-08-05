@@ -12,6 +12,7 @@ from src.ingestion.entsoe_client import (
     LOAD_COLUMN,
     fetch_actual_load,
     fetch_load_frame,
+    make_client,
     to_utc_hourly,
     trailing_window,
 )
@@ -139,6 +140,12 @@ def test_trailing_window_covers_the_repull_period_and_tomorrow():
     # Tomorrow is included so the day-ahead forecast is picked up as soon as it publishes.
     assert end == pd.Timestamp("2026-08-07 00:00", tz="UTC")
     assert (end - start) > pd.Timedelta(days=14)
+
+
+def test_a_missing_token_explains_how_to_get_one():
+    # The token has a ~3-working-day lead time, so the error has to say more than "unset".
+    with pytest.raises(RuntimeError, match="transparency@entsoe.eu"):
+        make_client()
 
 
 def test_trailing_window_rejects_a_zero_day_window():
