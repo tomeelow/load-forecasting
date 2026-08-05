@@ -73,6 +73,7 @@ flattering one.
 ```bash
 git clone <repo> && cd load-forecasting
 uv sync
+uv run pre-commit install
 cp .env.example .env   # then paste your ENTSO-E token into ENTSOE_API_KEY
 ```
 
