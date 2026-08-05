@@ -177,6 +177,7 @@ def run_backtest(
     inner_validation_days: int = 45,
     tune: bool = True,
     n_trials: int = 20,
+    tuning_timeout_s: int | None = None,
     quantiles: tuple[float, ...] = (),
     seed: int = 42,
     num_boost_round: int = 2000,
@@ -224,6 +225,7 @@ def run_backtest(
             y.loc[inner_val],
             n_trials=n_trials,
             seed=seed,
+            timeout_s=tuning_timeout_s,
             num_boost_round=num_boost_round,
             early_stopping_rounds=early_stopping_rounds,
         )
