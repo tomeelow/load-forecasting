@@ -30,6 +30,8 @@ the one feature that survives no matter how the horizon moves.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
+from hashlib import sha256
 
 import numpy as np
 import pandas as pd
@@ -168,7 +170,11 @@ def make_features(
     if include_target:
         f[TARGET_COLUMN] = df["load_mw"]
 
-    built = f.dropna()
+    # Float throughout, including the integer-looking calendar fields. An integer column
+    # in a logged model signature cannot represent a missing value, so a serving frame
+    # with one gap would fail schema enforcement rather than being handled; LightGBM
+    # treats these as continuous either way.
+    built = f.dropna().astype("float64")
     logger.debug(
         "Features h={}: {} rows x {} columns ({} dropped for incomplete history)",
         horizon,
@@ -197,6 +203,16 @@ def feature_columns(
             continue
         selected.append(column)
     return selected
+
+
+def feature_set_id(columns: Iterable[str]) -> str:
+    """A short, stable hash of a feature set.
+
+    Two runs are only comparable if they saw the same columns. Logging this alongside
+    the metrics turns "why did MAPE move" from an argument into a lookup.
+    """
+    payload = "|".join(sorted(c for c in columns if c != TARGET_COLUMN))
+    return sha256(payload.encode()).hexdigest()[:10]
 
 
 def target_derived_columns(columns: list[str]) -> list[str]:
