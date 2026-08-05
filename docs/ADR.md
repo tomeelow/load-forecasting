@@ -214,3 +214,68 @@ rather than a documentation gap.
 Persistent false positives from seasonality that the reference-window choice cannot
 fix, which would push toward a purpose-built residual-based monitor for the
 performance signal while keeping Evidently for input drift.
+
+---
+
+## ADR-005 — Feature rows are indexed by target hour, not by prediction moment
+
+**Status:** accepted · **Date:** 2026-08-05 · **Supersedes:** the convention in the
+plan's Phase 2 snippet
+
+### Context
+
+A supervised row for a forecasting problem joins two different moments: the hour whose
+load is being predicted (`T`) and the moment the prediction is made (`T - H`). Only one
+of them can be the index, and the choice silently determines what "a lag of 24 hours"
+means.
+
+The first implementation followed the plan's snippet and indexed by prediction moment:
+row `t` carried `target = load[t + H]` and lags `load[t - L]` with `L >= H`. Reading
+that back against the target revealed a factor-of-two problem — `load[t - H]` is
+`load[T - 2H]`, so a 24-hour-ahead model was being fed nothing newer than 48 hours
+before the hour it was predicting.
+
+### Decision
+
+Index rows by the target hour `T`. For the row at `T`: the target is `load[T]`, lags
+are `load[T - L]` for `L >= H`, rolling statistics run over `load[T - H - W + 1 .. T - H]`,
+and weather and calendar features describe `T` itself.
+
+### Reasoning
+
+It makes the leakage rule and the code say the same thing. CLAUDE.md states the rule
+as "at least `H` hours old **relative to the target**", and under this convention the
+minimum lag is `H` relative to the target — exactly, not approximately. Under the old
+convention the code satisfied a stricter rule than the one written down, which is the
+kind of mismatch that survives review precisely because it errs safe.
+
+Over-conservatism is not free. Load has strong short-range autocorrelation, so the
+hours between `T - 2H` and `T - H` are the most informative ones available; discarding
+them buys no safety, because they are genuinely known at the prediction moment.
+
+Three other things fall out rather than needing separate handling:
+
+- **Weather aligns to the hour being predicted.** Demand responds to the weather it is
+  in, and the forecast endpoint publishes that value in advance, so it is available.
+- **Calendar features describe the target hour** — the hour whose demand profile the
+  model is being asked about.
+- **Serving reads naturally.** The output index *is* the set of hours being forecast,
+  and the benchmark column `tso_forecast_mw[T]` lines up with the model's prediction
+  for `T` without any shifting, which matters everywhere PSE is the comparison.
+
+### Consequences
+
+- The horizon is no longer visible in the index; a row at `T` looks the same whether it
+  came from a 1-hour or a 48-hour model. The horizon must therefore be carried
+  explicitly as run metadata and as part of the registered model's identity.
+- Two models at different horizons produce predictions on the *same* index, so anything
+  storing predictions must key on (target hour, horizon), not target hour alone.
+- The rule "no negative shifts on the load series" is no longer a sufficient smell test
+  for leakage, because the target is now an unshifted column. The behavioural leakage
+  tests, which poison the input and watch the output, carry that weight instead.
+
+### What would change our mind
+
+Nothing foreseeable. The alternative is defensible but strictly less informative, and
+the mismatch it creates between the stated rule and the implemented one is the more
+dangerous property.
