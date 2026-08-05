@@ -279,3 +279,88 @@ Three other things fall out rather than needing separate handling:
 Nothing foreseeable. The alternative is defensible but strictly less informative, and
 the mismatch it creates between the stated rule and the implemented one is the more
 dangerous property.
+
+---
+
+## ADR-006 — The backtest embargoes one horizon between training and testing
+
+**Status:** accepted · **Date:** 2026-08-05
+
+### Context
+
+Rolling-origin backtesting is the standard answer to "never use a random split". The
+usual implementation trains up to an origin and predicts the block immediately after it.
+With a *direct H-step* model, that is still subtly optimistic.
+
+A row is labelled with the load at its target hour, and that load only becomes known at
+that hour. To predict target `T` the model is standing at `T - H`. If training ran right
+up to the origin, the last training labels belong to hours that had not been published
+when the prediction was made — the model was fitted on facts from its own future. The
+effect is small in MAPE and completely invisible in the output.
+
+### Decision
+
+Every split leaves a gap of exactly `horizon` hours between the last training target and
+the first test target, at both levels: the outer rolling-origin splits and the inner
+train/validation split used for early stopping.
+
+### Reasoning
+
+It is the difference between "out-of-sample" and "out-of-sample and reproducible in
+production". A number produced without the embargo cannot be delivered on live, because
+live has no access to those labels — and the gap between backtest and production is
+exactly what this project claims to care about.
+
+The cost is `horizon - 1` rows per split, which at a 24-hour horizon is under a day of
+data per origin. That is a rounding error against two years of training data, and the
+alternative is a metric that is quietly wrong in the flattering direction.
+
+Applying it to the inner validation split matters just as much: early stopping chooses
+the iteration count, so a validation block that touches the training data picks a model
+that is over-fitted in a way the outer split cannot detect.
+
+### Consequences
+
+- Reported metrics are slightly worse than a naive implementation would produce. That is
+  the point; the comparison against PSE is only meaningful if our side is honest.
+- `Split.embargo` is asserted in the tests, so removing the gap breaks the suite rather
+  than silently improving the numbers.
+
+---
+
+## ADR-007 — Hyperparameters are tuned once per backtest, not once per origin
+
+**Status:** accepted · **Date:** 2026-08-05
+
+### Context
+
+The backtest refits at every origin. Re-running Optuna at each one would be the
+theoretically pure choice: the production system would presumably re-tune periodically
+too.
+
+### Decision
+
+Search once, on the first origin's training block, then freeze the parameters for every
+subsequent origin.
+
+### Reasoning
+
+Cost, and attribution. Tuning at all 26 origins multiplies the search cost by 26 for a
+result nobody could interpret — if the parameters move between origins, a change in error
+cannot be attributed to the data, the model, or the search.
+
+It leaks nothing. The first origin's training block precedes every test block in the
+backtest, so parameters chosen there are chosen from information available before any
+scored hour. This is weaker than re-tuning but it is not optimistic, which is the
+property that matters.
+
+The search is also bounded by `model.tuning.timeout_s`, because an evaluation nobody can
+afford to re-run stops being an evaluation and becomes a screenshot.
+
+### Consequences
+
+- Parameters fitted to the earliest window are used on the latest one, so a genuine
+  regime change late in the backtest is handled with stale settings — which, if anything,
+  understates the model.
+- When Phase 7 retrains on a schedule, it should re-tune periodically rather than inherit
+  this choice; that is a production cadence question, not an evaluation one.
