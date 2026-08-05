@@ -1,8 +1,13 @@
 # Day-Ahead Electricity Load Forecasting — Polish Bidding Zone
 
-> **Status:** Phases 0–2 complete (scaffolding, ingestion, leakage-safe features).
-> Training, tracking, serving, monitoring and the dashboard are not built yet.
-> Sections below marked **TODO** are placeholders until those phases land.
+> **Status:** Phases 0–5 complete — ingestion, leakage-safe features, baselines, a
+> tuned LightGBM with P10/P50/P90 bands, MLflow tracking with a gated model registry,
+> and a rolling-origin backtest benchmarked against PSE. Serving, orchestration, drift
+> monitoring and the dashboard are not built yet. Sections marked **TODO** are
+> placeholders until those phases land.
+>
+> All metrics currently come from synthetic data — see the warning on the benchmark
+> table below.
 
 ## What this is
 
@@ -26,18 +31,49 @@ ASCII version this will be redrawn from).
 
 ## Benchmark results
 
-**TODO** — no model has been trained yet. This table is filled from the
-rolling-origin backtest in Phase 5, and reports per-segment breakdowns (peak vs
-off-peak, weekday vs weekend, holidays) including the segments where the model
-*loses* to PSE.
+> ⚠️ **These numbers come from synthetic data and are not a result.** The ENTSO-E token
+> has not been granted yet, so the loop runs against
+> [`src/synthetic.py`](src/synthetic.py). Read this table as evidence that the
+> evaluation works end to end, not as evidence about Polish demand. In particular the
+> synthetic "PSE forecast" is constructed as *the actual load plus small autocorrelated
+> noise*, which makes it a near-oracle that no model fitted on lags and weather can
+> beat. The real PSE forecast has no such advantage. Every figure here is regenerated
+> by `uv run python -m pipelines.backtest` once real data lands.
+
+Rolling-origin backtest, 24-hour horizon: 26 expanding-window origins, **8,736
+out-of-sample hours covering a full year** (2023-01-09 → 2024-01-08), with a 24-hour
+embargo between each training window and the block it predicts. Full report, including
+the per-segment breakdown, in [`reports/benchmark_h24.md`](reports/benchmark_h24.md).
 
 | Model | MAPE | RMSE (MW) | MAE (MW) | vs PSE forecast |
 |---|---|---|---|---|
-| Naive seasonal (`load[t−168]`) | TODO | TODO | TODO | TODO |
-| **PSE day-ahead forecast (ENTSO-E)** | TODO | TODO | TODO | *(the benchmark)* |
-| LightGBM (calendar only) | TODO | TODO | TODO | TODO |
-| LightGBM (+ weather) | TODO | TODO | TODO | TODO |
-| LightGBM (+ weather, tuned) | TODO | TODO | TODO | TODO |
+| Naive seasonal (`load[T−168]`) | 3.405% | 837 | 636 | +2.286 pp worse |
+| Linear (calendar + weather) | 4.412% | 1012 | 828 | +3.293 pp worse |
+| **PSE day-ahead forecast (ENTSO-E)** | 1.119% | 260 | 208 | *(the benchmark)* |
+| LightGBM (calendar + lags) | 2.402% | 581 | 451 | +1.283 pp worse |
+| LightGBM (+ weather) | 1.868% | 446 | 348 | +0.748 pp worse |
+| LightGBM (+ weather, tuned) | 1.837% | 436 | 343 | +0.718 pp worse |
+
+P10/P50/P90 pinball losses: 82.2 / 171.7 / 87.5 MW.
+
+### Where the model loses
+
+It loses everywhere, by 0.66–0.87 pp, for the reason given in the warning above. The
+*shape* of the losses is still informative and matches what the literature predicts:
+
+| Segment | Hours | Model MAPE | PSE MAPE | Gap |
+|---|---|---|---|---|
+| Holidays | 312 | 2.166% | 1.300% | +0.866 pp |
+| Christmas–New Year | 216 | 1.908% | 1.112% | +0.796 pp |
+| Weekends | 2496 | 2.041% | 1.249% | +0.792 pp |
+| Off-peak hours | 3276 | 2.005% | 1.219% | +0.787 pp |
+| Weekdays | 6240 | 1.756% | 1.067% | +0.688 pp |
+| Peak hours | 5460 | 1.736% | 1.059% | +0.677 pp |
+
+The worst segments are holidays and the Christmas–New Year week — the two the plan
+predicted, and the two with the fewest examples to learn from. Weather is worth
+0.53 pp of MAPE (2.402% → 1.868%); tuning adds a further 0.03 pp, which is small enough
+to be worth knowing before anyone spends a day on hyperparameters.
 
 ## Data inventory
 
@@ -154,10 +190,12 @@ linear job.
 ```
 src/ingestion/   ENTSO-E + Open-Meteo clients, dataset assembly, validation
 src/features/    leakage-safe feature builder (shared by training and serving)
-src/models/      training, tuning, baselines            (Phase 3, empty)
+src/models/      baselines, LightGBM, tuning, promotion gate, MLflow tracking
+src/evaluation/  metrics, chronological splits, rolling-origin backtest
 src/api/         FastAPI service                        (Phase 6, empty)
 src/monitoring/  Evidently drift + performance reports  (Phase 8, empty)
-pipelines/       runnable entrypoints (ingest, …)
+pipelines/       runnable entrypoints (ingest, train, backtest)
+reports/         generated benchmark tables
 config/          pipeline parameters (dates, cities, horizon, bounds)
 tests/           leakage, DST, validation and ingestion tests
 docs/            plan + architecture decision record
@@ -165,7 +203,8 @@ docs/            plan + architecture decision record
 
 ## Decisions
 
-Four load-bearing choices are recorded with their reasoning in
+Seven load-bearing choices are recorded with their reasoning in
 [`docs/ADR.md`](docs/ADR.md): LightGBM over Prophet/SARIMA, direct per-horizon
-forecasting over recursive, MLflow + DVC over ad-hoc artifact files, and Evidently
-over a hand-rolled drift check.
+forecasting over recursive, MLflow + DVC over ad-hoc artifact files, Evidently over a
+hand-rolled drift check, indexing feature rows by target hour, embargoing one horizon
+between training and test blocks, and tuning once per backtest rather than per origin.
