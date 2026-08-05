@@ -81,9 +81,12 @@ mlflow:
 
 backtest:
   initial_train_days: 730         # two years before the first origin
-  test_days: 7                    # each origin predicts the following week
-  step_days: 7                    # origins step weekly, so blocks tile without overlap
-  max_splits: null                # null = as many as the data allows
+  test_days: 14                   # each origin predicts the following fortnight
+  step_days: 14                   # blocks tile without overlapping
+  # 26 fortnights = 364 days, so the accumulated predictions cover a full year of
+  # seasons. Each origin is a full refit of every variant, so this is the knob that
+  # decides whether the backtest takes minutes or hours.
+  max_splits: 26
   quantiles: true                 # also backtest the P10/P50/P90 band
   reports_dir: reports
 
