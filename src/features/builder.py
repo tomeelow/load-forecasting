@@ -1,11 +1,27 @@
 """The feature builder. One implementation, used by training and by serving.
 
-**The leakage rule.** Forecasting `load[t + H]` may use only information available at
-`t`. Every feature derived from the load series here is therefore at least `H` hours
-old relative to the target, and the lag set is derived from `horizon` rather than
-written down — a hardcoded 24 is correct exactly once and silently wrong everywhere
-else. `tests/test_no_leakage.py` re-checks this structurally and behaviourally across
-several horizons.
+**The indexing convention — read this before changing anything here.**
+
+A row is indexed by the **target hour** `T`: the hour whose load is being predicted.
+The prediction moment is therefore `T - H`, `H` hours earlier. So for the row at `T`:
+
+    target        = load[T]
+    load_lag_L    = load[T - L]        for every L in `lag_hours(H)`, and min(L) == H
+    load_roll_*_W = stats over load[T - H - W + 1 .. T - H]
+    weather       = weather at T       (the hour being predicted)
+    calendar      = local calendar of T
+
+**The leakage rule.** At the prediction moment `T - H` the newest load anyone can know
+is `load[T - H]`. Every load-derived feature is therefore at least `H` hours old
+*relative to the target*, which is exactly — not merely at least — what the horizon
+requires. The lag set is derived from `horizon` rather than written down; a hardcoded
+24 is correct once and silently wrong everywhere else. `tests/test_no_leakage.py`
+re-checks this structurally, behaviourally and arithmetically across several horizons.
+
+The alternative convention — indexing rows by prediction moment — was what this module
+used first, and it quietly cost a factor of two: a lag of `H` relative to the row was
+then `2H` relative to the target, discarding a full horizon of the most recent and most
+informative history for no safety benefit.
 
 The 168-hour lag (same hour, one week ago) is safe at any day-ahead horizon and is
 the one feature that survives no matter how the horizon moves.
@@ -89,11 +105,13 @@ def make_features(
     """Build the feature frame for a given horizon.
 
     `df` is UTC-hourly with at least `load_mw`, `temp_c`, `wind_ms` and `cloud_cover`.
-    The row indexed `t` predicts `load_mw[t + horizon]`, and uses nothing newer than
-    `load_mw[t - horizon]`.
+    The row indexed `T` predicts `load_mw[T]` from the standpoint of `T - horizon`, and
+    uses no load newer than `load_mw[T - horizon]`. See the module docstring for the
+    full convention.
 
-    Set `include_target=False` at serving time, where the target does not exist yet;
-    the trailing rows then survive instead of being dropped for want of a future value.
+    Set `include_target=False` at serving time, where the target does not exist yet.
+    With load known up to `L`, rows out to `L + horizon` survive — precisely the hours
+    a forecast run is asked for.
 
     Calendar fields are derived from the **Europe/Warsaw local** timestamp, not from
     UTC. Demand follows human behaviour and humans follow the local clock: the morning
@@ -123,30 +141,31 @@ def make_features(
     f["dow_sin"] = np.sin(2 * np.pi * f["dow"] / 7)
     f["dow_cos"] = np.cos(2 * np.pi * f["dow"] / 7)
 
-    # --- Lagged load: every one at least `horizon` hours old ---
+    # --- Lagged load: each one `lag` hours before the target, and lag >= horizon ---
     for lag in lag_hours(horizon, weekly_lag):
         f[f"load_lag_{lag}"] = df["load_mw"].shift(lag)
 
-    # Rolling stats over a series that is already `horizon` hours behind, so the
-    # freshest observation inside the window is still legal.
+    # Rolling stats over a series already `horizon` hours behind the target, so the
+    # freshest observation inside the window is the newest one the horizon allows.
     base = df["load_mw"].shift(horizon)
     f[f"load_roll_mean_{rolling_window}"] = base.rolling(rolling_window).mean()
     f[f"load_roll_std_{rolling_window}"] = base.rolling(rolling_window).std()
 
-    # --- Weather ---
-    # Aligned to `t`, not to the target hour `t + horizon`, following the plan. Weather
-    # at the target hour is also legal (it comes from the forecast API, which is exactly
-    # what serving has) and is probably the stronger feature, since demand responds to
-    # the weather it is in. Changing it changes the feature schema, so it is flagged
-    # rather than done. Either way these are observed values in training and forecast
-    # values at serving — see the README on that skew.
+    # --- Weather at the target hour ---
+    # Unshifted, so these are the conditions during the hour being forecast rather than
+    # during the hour the forecast is made. That looks like leakage and is not: at
+    # serving time these values come from the Open-Meteo *forecast* endpoint, which
+    # publishes the weather for T well before T happens. The load series gets no such
+    # treatment — nobody publishes tomorrow's demand in advance, which is the whole
+    # reason this project exists. In training these are observed values while at serving
+    # they are forecast values; see the README on that skew.
     f["temp_c"] = df["temp_c"]
     f["temp_sq"] = df["temp_c"] ** 2
     f["wind_ms"] = df["wind_ms"]
     f["cloud_cover"] = df["cloud_cover"]
 
     if include_target:
-        f[TARGET_COLUMN] = df["load_mw"].shift(-horizon)
+        f[TARGET_COLUMN] = df["load_mw"]
 
     built = f.dropna()
     logger.debug(

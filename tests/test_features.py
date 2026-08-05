@@ -24,7 +24,8 @@ def test_leading_rows_without_enough_history_are_dropped(short_dataset):
 
     # The deepest reach back is the 168+24 lag; the rolling window only needs 47 hours.
     assert features.index.min() == short_dataset.index.min() + pd.Timedelta(hours=192)
-    assert features.index.max() == short_dataset.index.max() - pd.Timedelta(hours=24)
+    # Rows are target-indexed, so the last hour of data is itself a usable target.
+    assert features.index.max() == short_dataset.index.max()
 
 
 def test_calendar_features_are_the_warsaw_clock_not_utc(short_dataset):
@@ -80,6 +81,19 @@ def test_weather_features_include_the_squared_temperature_term(short_dataset):
     assert {"wind_ms", "cloud_cover"} <= set(features.columns)
 
 
+@pytest.mark.parametrize("horizon", [1, 24, 48])
+def test_weather_is_the_weather_of_the_hour_being_predicted(short_dataset, horizon):
+    """Not the weather at the prediction moment — demand responds to the hour it is in.
+
+    Legal because the forecast endpoint publishes it in advance; see the builder.
+    """
+    features = make_features(short_dataset, horizon)
+    row = features.index[len(features) // 2]
+
+    for column in ("temp_c", "wind_ms", "cloud_cover"):
+        assert features.loc[row, column] == pytest.approx(short_dataset.loc[row, column])
+
+
 @pytest.mark.parametrize("horizon", [1, 6, 24, 48])
 def test_the_lag_set_moves_with_the_horizon(short_dataset, horizon):
     features = make_features(short_dataset, horizon)
@@ -96,11 +110,11 @@ def test_the_rolling_window_is_reflected_in_the_column_name(short_dataset):
     assert "load_roll_mean_24" not in features.columns
 
 
-def test_serving_keeps_the_rows_training_would_drop(short_dataset):
+def test_serving_omits_the_target_column(short_dataset):
     features = make_features(short_dataset, 24, include_target=False)
 
     assert TARGET_COLUMN not in features.columns
-    assert features.index.max() == short_dataset.index.max()
+    assert features.index.equals(make_features(short_dataset, 24).index)
 
 
 def test_serving_can_build_features_for_tomorrow_from_weather_alone():
