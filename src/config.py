@@ -33,6 +33,8 @@ class DataConfig:
     raw_dir: Path
     processed_dir: Path
     dataset_filename: str
+    synthetic_start: str
+    synthetic_end: str
 
     @property
     def dataset_path(self) -> Path:
@@ -70,12 +72,63 @@ class ValidationConfig:
 
 
 @dataclass(frozen=True)
+class TuningConfig:
+    n_trials: int
+    timeout_s: int | None
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    horizons: tuple[int, ...]
+    seed: int
+    validation_days: int
+    num_boost_round: int
+    early_stopping_rounds: int
+    quantiles: tuple[float, ...]
+    tuning: TuningConfig
+
+
+@dataclass(frozen=True)
+class PromotionConfig:
+    metric: str
+    max_regression: float
+
+
+@dataclass(frozen=True)
+class MlflowConfig:
+    tracking_uri: str
+    experiment: str
+    registered_model_name: str
+    champion_alias: str
+
+
+@dataclass(frozen=True)
+class BacktestConfig:
+    initial_train_days: int
+    test_days: int
+    step_days: int
+    max_splits: int | None
+    quantiles: bool
+    reports_dir: Path
+
+
+@dataclass(frozen=True)
+class EvaluationConfig:
+    peak_hours: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class Config:
     data: DataConfig
     ingestion: IngestionConfig
     weather: WeatherConfig
     features: FeaturesConfig
     validation: ValidationConfig
+    model: ModelConfig
+    promotion: PromotionConfig
+    mlflow: MlflowConfig
+    backtest: BacktestConfig
+    evaluation: EvaluationConfig
 
 
 def _resolve(path: str) -> Path:
@@ -105,6 +158,8 @@ def load_config(path: Path | None = None) -> Config:
             raw_dir=_resolve(data["raw_dir"]),
             processed_dir=_resolve(data["processed_dir"]),
             dataset_filename=data["dataset_filename"],
+            synthetic_start=data["synthetic_start"],
+            synthetic_end=data["synthetic_end"],
         ),
         ingestion=IngestionConfig(**raw["ingestion"]),
         weather=WeatherConfig(
@@ -115,4 +170,21 @@ def load_config(path: Path | None = None) -> Config:
         ),
         features=FeaturesConfig(**raw["features"]),
         validation=ValidationConfig(**raw["validation"]),
+        model=ModelConfig(
+            **{
+                k: v
+                for k, v in raw["model"].items()
+                if k not in ("horizons", "quantiles", "tuning")
+            },
+            horizons=tuple(raw["model"]["horizons"]),
+            quantiles=tuple(raw["model"]["quantiles"]),
+            tuning=TuningConfig(**raw["model"]["tuning"]),
+        ),
+        promotion=PromotionConfig(**raw["promotion"]),
+        mlflow=MlflowConfig(**raw["mlflow"]),
+        backtest=BacktestConfig(
+            **{k: v for k, v in raw["backtest"].items() if k != "reports_dir"},
+            reports_dir=_resolve(raw["backtest"]["reports_dir"]),
+        ),
+        evaluation=EvaluationConfig(peak_hours=tuple(raw["evaluation"]["peak_hours"])),
     )
