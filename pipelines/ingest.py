@@ -108,7 +108,10 @@ def run(cfg: Config, full: bool) -> tuple[Path, ValidationReport]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Pull ENTSO-E load and TSO forecast plus Open-Meteo weather into "
+        "the canonical UTC-hourly dataset, validate it, and write parquet."
+    )
     parser.add_argument(
         "--full",
         action="store_true",
