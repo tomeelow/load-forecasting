@@ -52,14 +52,29 @@ def test_every_lag_column_is_at_least_the_horizon_old(short_dataset, horizon):
 
 
 @pytest.mark.parametrize("horizon", HORIZONS)
-def test_no_unexpected_column_is_derived_from_the_load_series(short_dataset, horizon):
+def test_the_feature_set_is_exactly_what_is_declared(short_dataset, horizon):
+    """A new column cannot appear without this test failing.
+
+    Names alone cannot prove a column is free of the target — so the guard is that
+    the column set is pinned. Adding a feature means editing this list, which means
+    someone has to state the leakage argument for it.
+    """
+    expected = {
+        "hour", "dow", "month", "is_weekend", "is_holiday",
+        "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+        *(f"load_lag_{lag}" for lag in lag_hours(horizon)),
+        "load_roll_mean_24", "load_roll_std_24",
+        "temp_c", "temp_sq", "wind_ms", "cloud_cover",
+        TARGET_COLUMN,
+    }
+
     features = make_features(short_dataset, horizon)
 
-    declared = set(target_derived_columns(list(features.columns)))
-    actual = {c for c in features.columns if is_target_derived(c)}
-
-    assert declared == actual
-    # Nothing else may carry the raw target: `load_mw` itself is never a feature.
+    assert set(features.columns) == expected
+    assert set(target_derived_columns(list(features.columns))) == {
+        c for c in features.columns if is_target_derived(c)
+    }
+    # The raw target is never itself a feature.
     assert "load_mw" not in features.columns
 
 
