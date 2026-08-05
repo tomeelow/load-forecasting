@@ -93,9 +93,10 @@ def test_future_load_cannot_influence_any_feature(short_dataset, horizon):
         poisoned_features.loc[poisoned_features.index <= cut, feature_columns],
     )
 
-    # And prove the test is not vacuous: the sentinel *does* reach the target column.
-    poisoned_targets = poisoned_features.loc[poisoned_features.index <= cut, TARGET_COLUMN]
-    assert (poisoned_targets > 1e8).any(), "sentinel never reached the target — test is vacuous"
+    # And prove the test is not vacuous: the sentinel *does* land in the frame, on the
+    # rows whose target hour falls inside the poisoned region.
+    poisoned_targets = poisoned_features.loc[poisoned_features.index > cut, TARGET_COLUMN]
+    assert (poisoned_targets > 1e8).all(), "sentinel never reached the target — test is vacuous"
 
 
 @pytest.mark.parametrize("horizon", HORIZONS)
@@ -134,14 +135,32 @@ def test_rolling_stats_are_computed_on_an_already_shifted_series(short_dataset, 
 
 
 @pytest.mark.parametrize("horizon", HORIZONS)
-def test_the_target_is_the_load_exactly_horizon_hours_later(short_dataset, horizon):
+def test_the_target_is_the_load_at_the_row_timestamp(short_dataset, horizon):
+    """Rows are indexed by target hour, so the target is simply the load at that hour."""
     features = make_features(short_dataset, horizon)
 
     for row in features.index[[0, len(features) // 2, -1]]:
-        target_time = row + pd.Timedelta(hours=horizon)
-        assert features.loc[row, TARGET_COLUMN] == pytest.approx(
-            short_dataset.loc[target_time, "load_mw"]
-        )
+        assert features.loc[row, TARGET_COLUMN] == pytest.approx(short_dataset.loc[row, "load_mw"])
+
+
+@pytest.mark.parametrize("horizon", HORIZONS)
+def test_the_freshest_load_used_is_exactly_the_horizon_not_more(short_dataset, horizon):
+    """Exactly `horizon`, not `2 * horizon`.
+
+    Being over-conservative is not free: it throws away the most recent and most
+    informative history for no safety gain. The prediction moment for the row at `T`
+    is `T - horizon`, and the load at that moment is known then.
+    """
+    features = make_features(short_dataset, horizon)
+
+    lags = [int(m.group(1)) for c in features.columns if (m := LAG_COLUMN_PATTERN.match(c))]
+    assert min(lags) == horizon
+
+    row = features.index[len(features) // 2]
+    prediction_moment = row - pd.Timedelta(hours=horizon)
+    assert features.loc[row, f"load_lag_{horizon}"] == pytest.approx(
+        short_dataset.loc[prediction_moment, "load_mw"]
+    )
 
 
 @pytest.mark.parametrize("horizon", HORIZONS)
