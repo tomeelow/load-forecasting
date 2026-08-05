@@ -94,9 +94,7 @@ def load_config(path: Path | None = None) -> Config:
     total = sum(c.weight for c in cities)
     if total <= 0:
         raise ValueError("City weights must sum to a positive number")
-    cities = tuple(
-        City(name=c.name, lat=c.lat, lon=c.lon, weight=c.weight / total) for c in cities
-    )
+    cities = tuple(City(name=c.name, lat=c.lat, lon=c.lon, weight=c.weight / total) for c in cities)
 
     return Config(
         data=DataConfig(
