@@ -13,8 +13,9 @@ mlruns/
 mlartifacts/
 mlflow.db
 
-# Monitoring output
+# Monitoring and evaluation output
 monitoring/reports/
+reports/
 
 # Secrets
 .env

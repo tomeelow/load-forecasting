@@ -8,6 +8,10 @@ data:
   raw_dir: data/raw
   processed_dir: data/processed
   dataset_filename: dataset.parquet
+  # Used only when no ingested dataset exists (i.e. no ENTSO-E token yet). Long enough
+  # for a two-year initial training window plus a full year of backtest origins.
+  synthetic_start: "2021-01-01"
+  synthetic_end: "2025-03-01"
 
 ingestion:
   # ENTSO-E revises "actual" load after first publication and some hours publish
@@ -49,3 +53,39 @@ validation:
   load_max_mw: 28000
   temp_min_c: -35.0
   temp_max_c: 45.0
+
+model:
+  horizons: [24]                  # a second horizon is a config change, not new code
+  seed: 42
+  validation_days: 60             # chronological validation block for early stopping
+  num_boost_round: 2000
+  early_stopping_rounds: 100
+  quantiles: [0.1, 0.5, 0.9]      # P10/P50/P90 band
+  tuning:
+    n_trials: 30
+    timeout_s: 900
+
+promotion:
+  metric: mape
+  # A candidate may be at most 2% relatively worse than the current champion before it
+  # counts as a material regression. Beating the naive baseline is non-negotiable.
+  max_regression: 1.02
+
+mlflow:
+  # sqlite rather than a plain file store: the model registry and its aliases need a
+  # database backend. The containerised Postgres server arrives in Phase 10.
+  tracking_uri: sqlite:///mlruns/mlflow.db
+  experiment: pl-load-forecasting
+  registered_model_name: pl_load_lgbm
+  champion_alias: champion
+
+backtest:
+  initial_train_days: 730         # two years before the first origin
+  test_days: 7                    # each origin predicts the following week
+  step_days: 7                    # origins step weekly, so blocks tile without overlap
+  max_splits: null                # null = as many as the data allows
+  quantiles: true                 # also backtest the P10/P50/P90 band
+  reports_dir: reports
+
+evaluation:
+  peak_hours: [7, 22]             # local clock, start inclusive and end exclusive
