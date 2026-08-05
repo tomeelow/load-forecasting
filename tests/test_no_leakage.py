@@ -59,14 +59,12 @@ def test_the_feature_set_is_exactly_what_is_declared(short_dataset, horizon):
     the column set is pinned. Adding a feature means editing this list, which means
     someone has to state the leakage argument for it.
     """
-    expected = {
-        "hour", "dow", "month", "is_weekend", "is_holiday",
-        "hour_sin", "hour_cos", "dow_sin", "dow_cos",
-        *(f"load_lag_{lag}" for lag in lag_hours(horizon)),
-        "load_roll_mean_24", "load_roll_std_24",
-        "temp_c", "temp_sq", "wind_ms", "cloud_cover",
-        TARGET_COLUMN,
-    }
+    calendar = {"hour", "dow", "month", "is_weekend", "is_holiday"}
+    cyclical = {"hour_sin", "hour_cos", "dow_sin", "dow_cos"}
+    lags = {f"load_lag_{lag}" for lag in lag_hours(horizon)}
+    rolling = {"load_roll_mean_24", "load_roll_std_24"}
+    weather = {"temp_c", "temp_sq", "wind_ms", "cloud_cover"}
+    expected = calendar | cyclical | lags | rolling | weather | {TARGET_COLUMN}
 
     features = make_features(short_dataset, horizon)
 
