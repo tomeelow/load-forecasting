@@ -1,0 +1,44 @@
+# Data and model artifacts — tracked by DVC / MLflow, never by git
+data/
+*.parquet
+*.csv
+*.pkl
+*.joblib
+*.txt.model
+*.lgb
+*.onnx
+
+# MLflow
+mlruns/
+mlartifacts/
+mlflow.db
+
+# Monitoring output
+monitoring/reports/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
