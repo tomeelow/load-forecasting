@@ -126,44 +126,38 @@ class BacktestResult:
 
 
 def _fit_variants(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    horizon: int,
+    X: pd.DataFrame,
+    y: pd.Series,
+    inner_train: pd.DatetimeIndex,
+    inner_val: pd.DatetimeIndex,
     *,
-    inner_validation_days: int,
     tuned_params: dict[str, object] | None,
     fit_kwargs: dict[str, object],
 ) -> dict[str, lgbm.TrainedModel]:
     """Fit each variant on one origin's training block.
 
-    Early stopping needs its own validation block, and it must come from the *tail* of
-    the training data with the same embargo — never from the test block, which the model
-    is not allowed to have seen.
+    The inner train/validation split is passed in rather than derived here, so the point
+    models and the quantile band are guaranteed to have seen exactly the same rows.
     """
-    inner_train, inner_val = chronological_split(
-        X_train.index, validation_days=inner_validation_days, horizon=horizon
-    )
-    all_columns = list(X_train.columns)
-    calendar_columns = feature_columns(all_columns, include_weather=False)
-
+    all_columns = list(X.columns)
     specs = {
-        CALENDAR_ONLY: (calendar_columns, None),
+        CALENDAR_ONLY: (feature_columns(all_columns, include_weather=False), None),
         WITH_WEATHER: (all_columns, None),
     }
     if tuned_params is not None:
         specs[TUNED] = (all_columns, tuned_params)
 
-    models = {}
-    for name, (columns, params) in specs.items():
-        models[name] = lgbm.train(
-            X_train.loc[inner_train, columns],
-            y_train.loc[inner_train],
-            X_train.loc[inner_val, columns],
-            y_train.loc[inner_val],
+    return {
+        name: lgbm.train(
+            X.loc[inner_train, columns],
+            y.loc[inner_train],
+            X.loc[inner_val, columns],
+            y.loc[inner_val],
             params=params,
             **fit_kwargs,
         )
-    return models
+        for name, (columns, params) in specs.items()
+    }
 
 
 def run_backtest(
@@ -239,13 +233,14 @@ def run_backtest(
         if len(test_index) == 0:
             continue
 
+        # Early stopping needs its own validation block, taken from the tail of the
+        # training data with the same embargo — never from the test block. Computed once
+        # per origin so every model fitted here has seen exactly the same rows.
+        inner_train, inner_val = chronological_split(
+            train_index, validation_days=inner_validation_days, horizon=horizon
+        )
         models = _fit_variants(
-            X.loc[train_index],
-            y.loc[train_index],
-            horizon,
-            inner_validation_days=inner_validation_days,
-            tuned_params=tuned_params,
-            fit_kwargs=fit_kwargs,
+            X, y, inner_train, inner_val, tuned_params=tuned_params, fit_kwargs=fit_kwargs
         )
         block = pd.DataFrame({ACTUAL: y.loc[test_index]})
         for name, model in models.items():
@@ -253,9 +248,6 @@ def run_backtest(
         point_frames.append(block)
 
         if quantiles:
-            inner_train, inner_val = chronological_split(
-                train_index, validation_days=inner_validation_days, horizon=horizon
-            )
             band = lgbm.train_quantiles(
                 X.loc[inner_train],
                 y.loc[inner_train],
