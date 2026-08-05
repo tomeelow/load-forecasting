@@ -68,14 +68,12 @@ feature builder is horizon-parametrised so the same code path serves both.
 forecast-aligned weather, and report both numbers here rather than only the
 flattering one.
 
-Two open questions on the feature side, both following the plan as written and both
-worth settling before the first model is trained:
-
-* **Weather is aligned to `t`, not to the target hour `t + H`.** Using the forecast for
-  the target hour is equally leakage-free and is what demand actually responds to.
-* **Calendar fields are derived from the UTC index.** Polish demand follows the local
-  clock, so the daily profile shifts by an hour twice a year unless `hour` and `dow`
-  come from `Europe/Warsaw`. (The holiday flag already uses the local date.)
+Weather features are aligned to the **hour being predicted**, not to the moment the
+forecast is made. That is legitimate rather than leakage: Open-Meteo publishes the
+forecast for hour `T` well before `T` arrives, so the value exists at prediction time.
+Nothing equivalent is true of the load series, which is exactly why this project is
+interesting. See [ADR-005](docs/ADR.md) for the row-indexing convention that makes the
+alignment explicit.
 
 ## Setup
 

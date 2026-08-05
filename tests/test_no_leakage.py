@@ -1,6 +1,7 @@
 """The leakage tests. If these are weak, every number this project ever reports is fiction.
 
-Forecasting `load[t + H]` may use only what is known at `t`. Three independent angles:
+Rows are indexed by target hour `T`, so the prediction moment is `T - H` and nothing
+newer than `load[T - H]` may reach the row. Three independent angles:
 
 1. **Structural** — read the generated columns and check every load-derived offset is at
    least `H` hours old, and that no *other* column is derived from the load series.
