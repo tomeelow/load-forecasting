@@ -46,3 +46,6 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Pipeline state (prediction log, run markers) — see ADR-008
+state/
