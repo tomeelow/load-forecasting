@@ -16,6 +16,7 @@ from pipelines import ingest
 from src import synthetic
 from src.ingestion.dataset import read_dataset
 from src.ingestion.entsoe_client import FORECAST_COLUMN, LOAD_COLUMN
+from src.pipeline_state import PipelineState
 
 WEATHER_COLUMNS = ["temp_c", "wind_ms", "cloud_cover", "humidity_pct"]
 
@@ -24,7 +25,8 @@ WEATHER_COLUMNS = ["temp_c", "wind_ms", "cloud_cover", "humidity_pct"]
 def tmp_cfg(cfg, tmp_path):
     """The real config, pointed at a temporary data directory."""
     data = dataclasses.replace(cfg.data, processed_dir=tmp_path, raw_dir=tmp_path)
-    return dataclasses.replace(cfg, data=data)
+    state = dataclasses.replace(cfg.state, dir=tmp_path)
+    return dataclasses.replace(cfg, data=data, state=state)
 
 
 def stub_sources(monkeypatch, frame: pd.DataFrame) -> None:
@@ -89,6 +91,59 @@ def test_the_exit_code_reports_validation_failure(tmp_cfg, monkeypatch):
     # The data is still written; the non-zero code is what a scheduled run reacts to.
     assert exit_code == 1
     assert tmp_cfg.data.dataset_path.exists()
+
+
+def test_running_twice_for_the_same_period_changes_nothing(tmp_cfg, monkeypatch):
+    """GitHub's cron can fire twice for the same day; that must be a no-op, not a mess."""
+    frame = synthetic.make_dataset(start="2024-01-01", end="2024-02-01")
+    stub_sources(monkeypatch, frame)
+
+    ingest.run(tmp_cfg, full=True)
+    first = read_dataset(tmp_cfg.data.dataset_path)
+
+    ingest.run(tmp_cfg, full=False)
+    second = read_dataset(tmp_cfg.data.dataset_path)
+
+    assert not second.index.has_duplicates
+    assert len(second) == len(first)
+    pd.testing.assert_index_equal(first.index, second.index)
+
+
+def test_a_missed_run_is_backfilled_rather_than_skipped(tmp_cfg, tmp_path):
+    """The failure this prevents is silent: a hole nothing ever goes back for."""
+    state = PipelineState(tmp_path / "state.json")
+    now = pd.Timestamp("2026-08-06 05:00", tz="UTC")
+    state.record_success(ingest.PIPELINE, now - pd.Timedelta(days=40))
+
+    start, end = ingest._window(
+        tmp_cfg, full=False, last_success=state.last_success(ingest.PIPELINE)
+    )
+
+    # The trailing window is 14 days, but the gap is 40 — the pull must cover the gap.
+    assert (end - start).days >= 40
+    assert start <= now - pd.Timedelta(days=40)
+
+
+def test_a_recent_run_does_not_widen_the_window(tmp_cfg, tmp_path):
+    state = PipelineState(tmp_path / "state.json")
+    state.record_success(ingest.PIPELINE, pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1))
+
+    start, end = ingest._window(
+        tmp_cfg, full=False, last_success=state.last_success(ingest.PIPELINE)
+    )
+    plain_start, _ = ingest._window(tmp_cfg, full=False)
+
+    assert start == plain_start
+
+
+def test_a_successful_ingest_records_its_marker(tmp_cfg, tmp_path, monkeypatch):
+    frame = synthetic.make_dataset(start="2024-01-01", end="2024-02-01")
+    stub_sources(monkeypatch, frame)
+    state = PipelineState(tmp_path / "state.json")
+
+    assert state.last_success(ingest.PIPELINE) is None
+    ingest.run(tmp_cfg, full=True, state=state)
+    assert state.last_success(ingest.PIPELINE) is not None
 
 
 def test_a_full_window_starts_from_the_configured_date(tmp_cfg):

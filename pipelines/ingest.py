@@ -38,14 +38,40 @@ from src.ingestion.dataset import (
 from src.ingestion.entsoe_client import fetch_load_frame, make_client, trailing_window
 from src.ingestion.validate import ValidationReport, validate_dataset
 from src.ingestion.weather_client import fetch_national_archive, fetch_national_forecast
+from src.pipeline_state import PipelineState
+
+PIPELINE = "ingest"
 
 ARCHIVE_LAG_DAYS = 7  # generous margin on Open-Meteo's few-day archive delay
 MAX_PAST_DAYS = 92  # Open-Meteo's documented maximum for `past_days`
 
 
-def _window(cfg: Config, full: bool) -> tuple[pd.Timestamp, pd.Timestamp]:
+def _window(
+    cfg: Config, full: bool, *, last_success: pd.Timestamp | None = None
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The window to pull.
+
+    A full run rebuilds the configured history. An incremental run re-pulls the trailing
+    window — but stretches it back to the last successful run when that is further away,
+    because GitHub's cron is best-effort and a skipped night must not leave a hole that
+    nothing ever returns for. Reaching too far back costs a slower run; reaching too
+    little costs data that is gone for good.
+    """
     if not full:
-        return trailing_window(cfg.ingestion.trailing_repull_days)
+        start, end = trailing_window(cfg.ingestion.trailing_repull_days)
+        if last_success is not None and last_success < start:
+            widened = last_success.tz_convert("UTC").floor("D")
+            logger.warning(
+                "Last successful ingest was {} ({:.1f} days ago), beyond the {}-day "
+                "trailing window — backfilling from {}",
+                last_success,
+                (end - last_success).total_seconds() / 86_400,
+                cfg.ingestion.trailing_repull_days,
+                widened,
+            )
+            start = widened
+        return start, end
+
     tz = cfg.data.timezone_local
     start = pd.Timestamp(cfg.data.start_date, tz=tz).tz_convert("UTC")
     end = (
@@ -78,9 +104,17 @@ def _weather(cfg: Config, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFram
     return archive.combine_first(forecast) if not archive.empty else forecast
 
 
-def run(cfg: Config, full: bool) -> tuple[Path, ValidationReport]:
-    """Pull one window, merge it into the stored dataset, validate and write."""
-    start, end = _window(cfg, full)
+def run(
+    cfg: Config, full: bool, *, state: PipelineState | None = None
+) -> tuple[Path, ValidationReport]:
+    """Pull one window, merge it into the stored dataset, validate and write.
+
+    Idempotent by construction: the window is merged onto whatever is stored, and
+    `merge_datasets` replaces overlapping hours rather than appending them. Running
+    twice for the same day produces the same file as running once.
+    """
+    state = state or PipelineState(cfg.state.pipeline_state_path)
+    start, end = _window(cfg, full, last_success=state.last_success(PIPELINE))
     run_id = new_run_id()
     logger.info(
         "Ingestion {} | {} | {} -> {}", run_id, "full" if full else "incremental", start, end
@@ -104,6 +138,9 @@ def run(cfg: Config, full: bool) -> tuple[Path, ValidationReport]:
 
     report = validate_dataset(dataset, cfg.validation)
     write_dataset(dataset, path)
+    # Recorded only once the data is on disk, so a crash mid-run leaves the marker
+    # where it was and the next run backfills the window this one failed to store.
+    state.record_success(PIPELINE)
     return path, report
 
 
