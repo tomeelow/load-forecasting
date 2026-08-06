@@ -137,6 +137,12 @@ class MonitoringConfig:
 
 
 @dataclass(frozen=True)
+class RetrainingConfig:
+    cadence_days: int
+    tune: bool
+
+
+@dataclass(frozen=True)
 class StateConfig:
     """Where the state that cannot be recomputed lives. See ADR-008."""
 
@@ -174,6 +180,7 @@ class Config:
     state: StateConfig
     serving: ServingConfig
     monitoring: MonitoringConfig
+    retraining: RetrainingConfig
 
 
 def _resolve(path: str) -> Path:
@@ -242,4 +249,5 @@ def load_config(path: Path | None = None) -> Config:
             reports_dir=_resolve(raw["monitoring"]["reports_dir"]),
             reference=ReferenceConfig(**raw["monitoring"]["reference"]),
         ),
+        retraining=RetrainingConfig(**raw["retraining"]),
     )
