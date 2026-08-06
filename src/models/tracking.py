@@ -45,10 +45,22 @@ class RunSpec:
 
 
 def configure(cfg: MlflowConfig) -> None:
-    """Point MLflow at the configured backend and experiment."""
-    if cfg.tracking_uri.startswith("sqlite:///"):
-        Path(cfg.tracking_uri.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
+    """Point MLflow at the configured backend and experiment.
+
+    A new experiment is created with its artifact store *next to its database*. Without
+    that, MLflow resolves artifacts against the working directory instead, so a test
+    pointing the tracking URI at a temporary file still writes its model binaries into
+    the repository — invisibly, a few megabytes per run, until the state snapshot that
+    carries `mlruns/` between scheduled runs is mostly abandoned test output.
+    """
     mlflow.set_tracking_uri(cfg.tracking_uri)
+    if cfg.tracking_uri.startswith("sqlite:///"):
+        database = Path(cfg.tracking_uri.removeprefix("sqlite:///"))
+        database.parent.mkdir(parents=True, exist_ok=True)
+        if mlflow.get_experiment_by_name(cfg.experiment) is None:
+            mlflow.create_experiment(
+                cfg.experiment, artifact_location=(database.parent / "artifacts").as_uri()
+            )
     mlflow.set_experiment(cfg.experiment)
     logger.debug("MLflow at {}, experiment '{}'", cfg.tracking_uri, cfg.experiment)
 

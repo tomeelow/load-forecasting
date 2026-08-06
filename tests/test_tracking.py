@@ -7,6 +7,8 @@ champion's metric can be read back, and that the alias only moves when the gate 
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import mlflow
 import pandas as pd
 import pytest
@@ -257,3 +259,24 @@ def test_without_a_declared_data_source_the_champion_metric_is_returned(tracking
     apply_gate(client, MODEL_NAME, version, ALIAS, promotion_decision(2.0, 4.0, None))
 
     assert champion_metric(client, MODEL_NAME, ALIAS, "mape") == pytest.approx(2.0)
+
+
+def test_a_temporary_backend_keeps_its_artifacts_to_itself(tmp_path, tiny_model):
+    """A test must not write model binaries into the repository it is testing."""
+    repo_mlruns = Path("mlruns/1/models")
+    before = len(list(repo_mlruns.iterdir())) if repo_mlruns.exists() else 0
+
+    cfg = MlflowConfig(
+        tracking_uri=f"sqlite:///{tmp_path}/isolated.db",
+        experiment="isolated-experiment",
+        registered_model_name="isolated_model",
+        champion_alias="champion",
+    )
+    configure(cfg)
+    model, X_sample = tiny_model
+    log_run(spec(), model, X_sample)
+
+    after = len(list(repo_mlruns.iterdir())) if repo_mlruns.exists() else 0
+    assert after == before, "artifacts leaked into the repository's MLflow store"
+    assert (tmp_path / "artifacts").exists()
+    mlflow.set_tracking_uri(None)
