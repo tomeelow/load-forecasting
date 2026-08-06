@@ -131,3 +131,9 @@ monitoring:
   rolling_mape_threshold: 4.0
   # Share of input features that must drift before input drift counts as a trigger.
   drift_share_threshold: 0.3
+
+retraining:
+  # Retrain on this cadence even without drift: the world moves slowly as well as
+  # suddenly, and a model that is never refreshed decays without ever tripping an alarm.
+  cadence_days: 7
+  tune: true
