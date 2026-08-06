@@ -118,6 +118,25 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True)
+class ReferenceConfig:
+    strategy: str
+    years_back: int
+    pad_days: int
+    min_rows: int
+    fallback_to_trailing: bool
+
+
+@dataclass(frozen=True)
+class MonitoringConfig:
+    reports_dir: Path
+    current_days: int
+    reference: ReferenceConfig
+    min_scored_predictions: int
+    rolling_mape_threshold: float
+    drift_share_threshold: float
+
+
+@dataclass(frozen=True)
 class StateConfig:
     """Where the state that cannot be recomputed lives. See ADR-008."""
 
@@ -154,6 +173,7 @@ class Config:
     evaluation: EvaluationConfig
     state: StateConfig
     serving: ServingConfig
+    monitoring: MonitoringConfig
 
 
 def _resolve(path: str) -> Path:
@@ -217,4 +237,9 @@ def load_config(path: Path | None = None) -> Config:
             dir=_resolve(raw["state"]["dir"]),
         ),
         serving=ServingConfig(**raw["serving"]),
+        monitoring=MonitoringConfig(
+            **{k: v for k, v in raw["monitoring"].items() if k not in ("reports_dir", "reference")},
+            reports_dir=_resolve(raw["monitoring"]["reports_dir"]),
+            reference=ReferenceConfig(**raw["monitoring"]["reference"]),
+        ),
     )
