@@ -140,6 +140,7 @@ class MonitoringConfig:
 class RetrainingConfig:
     cadence_days: int
     tune: bool
+    keep_runs_days: int
 
 
 @dataclass(frozen=True)

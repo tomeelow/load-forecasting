@@ -364,3 +364,148 @@ afford to re-run stops being an evaluation and becomes a screenshot.
   understates the model.
 - When Phase 7 retrains on a schedule, it should re-tune periodically rather than inherit
   this choice; that is a production cadence question, not an evaluation one.
+
+---
+
+## ADR-008 — Pipeline state lives on a force-pushed orphan branch
+
+**Status:** accepted · **Date:** 2026-08-06
+
+### Context
+
+GitHub Actions runners are ephemeral: the filesystem is destroyed when the job ends.
+The daily loop nevertheless has to remember things between runs, and they are not all
+equally replaceable:
+
+| State | Size | Replaceable? |
+|---|---|---|
+| Prediction log (`state/predictions.db`) | ~30 KB, +50 KB/year | **No.** What the service told someone yesterday cannot be recovered. |
+| Last-success markers and retrain flag | < 1 KB | **No.** Losing them means a missed run is never backfilled and a raised flag never acted on. |
+| MLflow store (`mlruns/`) | ~50 MB | Partly. Run history is lost; the champion could be retrained but not reproduced. |
+| Dataset (`data/processed/`) | ~3 MB | **Yes**, from ENTSO-E in about five minutes. |
+
+The prediction log is the one that decides this. Everything Phase 8 measures is a join
+against it, so a mechanism that loses it occasionally produces monitoring that is
+quietly meaningless.
+
+### Decision
+
+At the start of each run, restore `state/`, `mlruns/` and `data/processed/` from an
+orphan branch named `pipeline-state`. At the end, commit them as a **single snapshot**
+and `git push --force` back to that branch.
+
+Runs older than `retraining.keep_runs_days` that no alias points at are deleted and
+their artifacts reclaimed with `mlflow gc`, so the snapshot does not grow without bound.
+
+### Reasoning
+
+The alternatives were each rejected for a specific reason rather than on taste:
+
+- **`actions/cache`** is evicted after seven days of no access and has no durability
+  guarantee at all. Perfectly good for the dataset, which is reproducible; unacceptable
+  for the prediction log, which is not.
+- **Workflow artifacts** expire (90 days by default) and cannot be updated in place —
+  each run would create a new one, and reading "the latest" means an API call to find it.
+- **An external object store** (S3, GCS) is the right answer at real scale and the wrong
+  answer here: it needs an account, credentials in secrets, and a bill, for a project
+  whose entire premise is that the loop runs for free.
+- **Committing to `main`** would bury the source history under a daily binary commit and
+  make every `git log` useless.
+
+Force-pushing a snapshot rather than appending commits is the part that makes it work.
+An append-only state branch would store a fresh copy of a multi-megabyte parquet and a
+50 MB artifact tree every single day — a gigabyte a year of history nobody will ever
+read. A snapshot keeps exactly one version, which is all that state means.
+
+The trade-off accepted: **the history of the state is not recoverable.** That is the
+correct thing to give up. MLflow already records run history inside its own database,
+and the prediction log accumulates rather than being rewritten, so what is lost is only
+the ability to see yesterday's copy of today's file.
+
+Force-pushing is normally something this repository does not do (see the git workflow in
+CLAUDE.md). It is safe here for reasons that do not generalise: `pipeline-state` is an
+orphan branch created by the workflow, it shares no history with `main`, nothing is ever
+developed on it, and `concurrency` prevents two runs from racing on it.
+
+### Consequences
+
+- The workflow needs `permissions: contents: write`.
+- A failed push loses that run's state. Mitigated by also uploading `state/` as a
+  workflow artifact with 14-day retention on every run, including failed ones.
+- Restoring is a `git checkout FETCH_HEAD -- <paths>`, which means a first run — or a run
+  after someone deletes the branch — starts empty and backfills. That path is exercised
+  rather than assumed: the ingest window widens to cover whatever gap the markers show.
+- Someone reading the repository sees a branch full of binary state. It is named for what
+  it is.
+
+### What would change our mind
+
+Serving moving off a laptop and onto real infrastructure. At that point the prediction
+log wants to be Postgres, the artifact store wants to be object storage, and this
+mechanism should be deleted rather than extended.
+
+---
+
+## ADR-009 — Drift is measured against the same weeks in previous years
+
+**Status:** accepted · **Date:** 2026-08-06
+
+### Context
+
+Drift detection compares a current window against a reference window. On electricity
+load, the choice of reference decides whether the result means anything.
+
+The conventional choice is a trailing reference: the last fortnight against the fortnight
+before it. On this target that reports drift every March and every October, because the
+temperature genuinely changed and demand genuinely moved with it. The model has not
+decayed; the seasons turned. An alert that fires twice a year on schedule gets muted, and
+a muted alert is not a control.
+
+### Decision
+
+The reference window is **the same calendar weeks in each of the previous three years**,
+padded by a week either side. September is judged against Septembers.
+
+Two supporting decisions fall out of it:
+
+- **Calendar features are excluded from drift testing entirely.** `hour`, `dow`, `month`,
+  `is_weekend` and the cyclical encodings are deterministic functions of the timestamp.
+  `hour` cannot drift — testing it asks whether two windows happen to contain a whole
+  number of days, and a fortnight ending mid-afternoon fails that every time. `month` is
+  worse: the seasonal reference pads each historical window by a week, so the month mix
+  differs *by construction* and drift is reported with certainty. Running the check with
+  them included on real data flagged nine features, all of them artifacts, which buried
+  the four that had actually moved.
+- **Performance is the decisive signal, not input drift.** Rolling error of served
+  predictions against actuals has no seasonal confound at all. Input drift is an early
+  warning that may or may not matter; a model getting worse is proof that it does.
+
+### Reasoning
+
+Removing the seasonal signal by construction is better than tuning a threshold until the
+false alarms stop, because a threshold high enough to ignore an October temperature swing
+is also high enough to ignore a real regime change in October.
+
+Measured on the ingested Polish data, the difference is not theoretical. Against a
+seasonal reference, no weather feature drifts and four load-level features do — a real
+shift in demand level worth retraining for. Against a trailing reference over the same
+hours, the temperature features drift too, for no reason other than the calendar.
+
+### Consequences
+
+- It needs years of history. In the first year of operation there is none, so
+  `fallback_to_trailing` applies and the check says which reference it used. During that
+  year seasonal false positives are expected and the performance signal is the one to
+  trust — this is stated in the report rather than left for someone to discover.
+- Three years of padded windows is a much larger reference sample than the current
+  window, which makes the K-S test more sensitive. That is the right direction for an
+  early-warning signal, and the share threshold rather than any single feature is what
+  triggers action.
+- A genuine multi-year trend — electrification, efficiency, a structural demand shift —
+  registers as drift, correctly, because this year stops looking like previous years.
+
+### What would change our mind
+
+Evidence that the load-level drift this reports is dominated by year-on-year trend rather
+than by anything a retrain fixes. The answer then is not a different reference window but
+detrending the comparison, which is a larger change than it sounds.

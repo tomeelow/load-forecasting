@@ -11,6 +11,7 @@ Postgres server without touching this module's callers.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -141,6 +142,59 @@ def champion_metric(client: MlflowClient, model_name: str, alias: str, metric: s
     if value is None:
         logger.warning("Champion version {} has no '{}' metric logged", version.version, metric)
     return value
+
+
+def prune_runs(
+    client: MlflowClient,
+    cfg: MlflowConfig,
+    *,
+    keep_days: int,
+    now: pd.Timestamp | None = None,
+) -> list[str]:
+    """Soft-delete tracked runs older than `keep_days` that no alias points at.
+
+    The artifact store grows by several megabytes per retrain, and the whole of it is
+    carried between scheduled runs (ADR-008). Without retention that mechanism has a
+    quiet expiry date — it works for months and then the state push starts timing out.
+
+    Aliased versions are never touched: whatever is serving must remain loadable, and so
+    must anything a rollback would reach for. Soft-deleted runs keep their metrics until
+    `mlflow gc` reclaims the files, so the history stays readable in the meantime.
+    """
+    now = pd.Timestamp(now or pd.Timestamp.now(tz="UTC")).tz_convert("UTC")
+    cutoff_ms = int((now - pd.Timedelta(days=keep_days)).timestamp() * 1000)
+
+    protected = set()
+    for version in client.search_model_versions(f"name='{cfg.registered_model_name}'"):
+        if version.aliases:
+            protected.add(version.run_id)
+    # No champion yet is a normal state, not an error worth handling loudly.
+    with suppress(Exception):
+        protected.add(
+            client.get_model_version_by_alias(cfg.registered_model_name, cfg.champion_alias).run_id
+        )
+
+    experiment = client.get_experiment_by_name(cfg.experiment)
+    if experiment is None:
+        return []
+
+    deleted = []
+    for run in client.search_runs([experiment.experiment_id], max_results=5000):
+        if run.info.run_id in protected or run.info.lifecycle_stage != "active":
+            continue
+        if run.info.start_time and run.info.start_time < cutoff_ms:
+            client.delete_run(run.info.run_id)
+            deleted.append(run.info.run_id)
+
+    if deleted:
+        logger.info(
+            "Marked {} run(s) older than {} days for deletion; `mlflow gc` reclaims the "
+            "artifacts. {} aliased run(s) protected.",
+            len(deleted),
+            keep_days,
+            len(protected),
+        )
+    return deleted
 
 
 def apply_gate(
