@@ -63,6 +63,12 @@ filterwarnings = [
     # starlette's TestClient prefers httpx2; not our code and not worth a dependency
     # whose only job is to silence a warning.
     "ignore:Using `httpx` with `starlette.testclient`",
+    # Evidently's internals: a tz-aware index it converts to periods, a numpy alias and
+    # litestar deprecations. All third-party, none actionable here.
+    "ignore:Converting to PeriodArray/Index representation will drop timezone information",
+    "ignore:numpy.core is deprecated",
+    "ignore:Call to deprecated function 'Dependency'",
+    "ignore:Use of deprecated class 'DependencyKwarg'",
 ]
 
 [dependency-groups]

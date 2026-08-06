@@ -111,3 +111,23 @@ serving:
   # Open-Meteo forecast days to pull per request. The target hours a day-ahead model
   # can actually reach are bounded by the freshness of the ingested actuals, not by this.
   weather_forecast_days: 3
+
+monitoring:
+  reports_dir: monitoring
+  current_days: 14                # the window being judged
+  reference:
+    # "seasonal" compares the current window against the same calendar weeks in
+    # previous years; "trailing" compares against the period immediately before it.
+    # Electricity load is strongly seasonal, so trailing comparison reports drift every
+    # spring and autumn purely because the weather turned. See ADR-009.
+    strategy: seasonal
+    years_back: 3
+    pad_days: 7                   # widen each historical window either side
+    min_rows: 500                 # below this the comparison is not worth making
+    fallback_to_trailing: true    # in year one there is no seasonal history yet
+  # A week of scored hours before production error means anything.
+  min_scored_predictions: 168
+  # Rolling MAPE of served predictions, in percent, above which a retrain is owed.
+  rolling_mape_threshold: 4.0
+  # Share of input features that must drift before input drift counts as a trigger.
+  drift_share_threshold: 0.3
