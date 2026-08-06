@@ -178,6 +178,7 @@ def train_horizon(cfg: Config, horizon: int, *, tune: bool = True) -> TrainingRe
         cfg.mlflow.registered_model_name,
         cfg.mlflow.champion_alias,
         cfg.promotion.metric,
+        data_source="synthetic" if data.synthetic else "ingested",
     )
     decision = promotion_decision(
         candidate_mape, naive_mape, champion, max_regression=cfg.promotion.max_regression

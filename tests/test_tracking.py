@@ -226,3 +226,34 @@ def test_extra_tables_are_logged_as_artifacts(tracking, tiny_model):
 
     artifacts = {a.path for a in MlflowClient().list_artifacts(run_id)}
     assert "segments.json" in artifacts
+
+
+def test_a_synthetic_champion_is_not_compared_against_a_real_data_candidate(tracking, tiny_model):
+    """Different data, different problem. A 2.5% on real load is not a regression."""
+    model, X_sample = tiny_model
+    client = MlflowClient()
+
+    run_id = log_run(
+        spec(synthetic=True, metrics={"mape": 1.7}),
+        model,
+        X_sample,
+        registered_model_name=MODEL_NAME,
+    )
+    version = latest_version_for_run(client, MODEL_NAME, run_id)
+    apply_gate(client, MODEL_NAME, version, ALIAS, promotion_decision(1.7, 4.0, None))
+
+    same_source = champion_metric(client, MODEL_NAME, ALIAS, "mape", data_source="synthetic")
+    other_source = champion_metric(client, MODEL_NAME, ALIAS, "mape", data_source="ingested")
+
+    assert same_source == pytest.approx(1.7)
+    assert other_source is None, "metrics from different data sources must not be compared"
+
+
+def test_without_a_declared_data_source_the_champion_metric_is_returned(tracking, tiny_model):
+    model, X_sample = tiny_model
+    client = MlflowClient()
+    run_id = log_run(spec(metrics={"mape": 2.0}), model, X_sample, registered_model_name=MODEL_NAME)
+    version = latest_version_for_run(client, MODEL_NAME, run_id)
+    apply_gate(client, MODEL_NAME, version, ALIAS, promotion_decision(2.0, 4.0, None))
+
+    assert champion_metric(client, MODEL_NAME, ALIAS, "mape") == pytest.approx(2.0)
