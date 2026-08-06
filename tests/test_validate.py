@@ -49,6 +49,16 @@ def test_a_timestamp_gap_is_flagged_with_its_location(clean, cfg):
     assert "(3 h)" in issue.examples[0]
 
 
+def test_polands_real_peak_load_is_inside_the_plausible_band(clean, cfg):
+    """28,304 MW on 2024-01-09 is a record, not a fault. The bounds must allow it."""
+    record = clean.copy()
+    record.iloc[10, record.columns.get_loc("load_mw")] = 28_304.0
+
+    report = validate_dataset(record, cfg.validation)
+
+    assert report.ok, "the configured bound rejects a real Polish winter peak"
+
+
 def test_an_implausible_load_value_is_flagged(clean, cfg):
     broken = clean.copy()
     broken.iloc[10, broken.columns.get_loc("load_mw")] = 91_000.0  # a whole grid too much
