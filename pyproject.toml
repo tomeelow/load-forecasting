@@ -6,7 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "entsoe-py==0.8.0",
+    "evidently==0.7.21",
+    "fastapi==0.141.1",
     "holidays==0.102",
+    "httpx==0.28.1",
     "lightgbm==4.7.0",
     "loguru==0.7.3",
     "matplotlib==3.11.1",
@@ -20,6 +23,7 @@ dependencies = [
     "pyyaml==6.0.3",
     "requests==2.34.2",
     "scikit-learn==1.9.0",
+    "uvicorn==0.52.1",
 ]
 
 [build-system]
