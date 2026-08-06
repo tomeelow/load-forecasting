@@ -1,13 +1,10 @@
 # Day-Ahead Electricity Load Forecasting — Polish Bidding Zone
 
-> **Status:** Phases 0–5 complete — ingestion, leakage-safe features, baselines, a
-> tuned LightGBM with P10/P50/P90 bands, MLflow tracking with a gated model registry,
-> and a rolling-origin backtest benchmarked against PSE. Serving, orchestration, drift
-> monitoring and the dashboard are not built yet. Sections marked **TODO** are
-> placeholders until those phases land.
->
-> All metrics currently come from synthetic data — see the warning on the benchmark
-> table below.
+> **Status:** Phases 0–8 complete — the loop is closed. Real ENTSO-E data is ingested
+> daily, forecasts are served from the registered champion and logged, served
+> predictions are scored against actuals as they arrive, drift is monitored against a
+> season-matched reference, and retraining runs behind the promotion gate without
+> anyone present. The Streamlit dashboard and the deployment target are what remain.
 
 ## What this is
 
@@ -31,14 +28,18 @@ ASCII version this will be redrawn from).
 
 ## Benchmark results
 
-> ⚠️ **These numbers come from synthetic data and are not a result.** The ENTSO-E token
-> has not been granted yet, so the loop runs against
-> [`src/synthetic.py`](src/synthetic.py). Read this table as evidence that the
-> evaluation works end to end, not as evidence about Polish demand. In particular the
-> synthetic "PSE forecast" is constructed as *the actual load plus small autocorrelated
-> noise*, which makes it a near-oracle that no model fitted on lags and weather can
-> beat. The real PSE forecast has no such advantage. Every figure here is regenerated
-> by `uv run python -m pipelines.backtest` once real data lands.
+> ⚠️ **This table is stale: the numbers below came from synthetic data.** Real ENTSO-E
+> data has since been ingested (2019-01-01 to date, 66,768 hourly rows) and the champion
+> is trained on it, but the rolling-origin backtest has not yet been re-run — that is a
+> ~20 minute job scheduled for the next pass. Until it is, read this table as evidence
+> that the evaluation machinery works, not as a result about Polish demand. The
+> synthetic "PSE forecast" in particular was constructed as *the actual load plus small
+> autocorrelated noise*, making it a near-oracle nothing could beat; the real PSE
+> forecast has no such advantage. Regenerate with:
+>
+> ```bash
+> uv run python -m pipelines.backtest
+> ```
 
 Rolling-origin backtest, 24-hour horizon: 26 expanding-window origins, **8,736
 out-of-sample hours covering a full year** (2023-01-09 → 2024-01-08), with a 24-hour
@@ -165,6 +166,38 @@ Browse the tracked runs, the registered model and the champion alias:
 
 ```bash
 uv run mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db
+```
+
+Serve forecasts from the registered champion:
+
+```bash
+uv run uvicorn src.api.main:app --port 8000
+```
+
+The four pipelines of the scheduled loop, each runnable on its own for debugging:
+
+```bash
+uv run python -m pipelines.ingest
+```
+
+```bash
+uv run python -m pipelines.evaluate
+```
+
+```bash
+uv run python -m pipelines.check_drift
+```
+
+```bash
+uv run python -m pipelines.retrain_if_needed
+```
+
+They run in that order daily via
+[`.github/workflows/daily-loop.yml`](.github/workflows/daily-loop.yml), which also
+carries state between runs — see [ADR-008](docs/ADR.md). Trigger one by hand with:
+
+```bash
+gh workflow run daily-loop.yml -f force_retrain=false
 ```
 
 Without an `ENTSOE_API_KEY`, both pipelines fall back to the synthetic generator in
