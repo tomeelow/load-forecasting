@@ -125,11 +125,24 @@ def latest_version_for_run(client: MlflowClient, model_name: str, run_id: str) -
     return None
 
 
-def champion_metric(client: MlflowClient, model_name: str, alias: str, metric: str) -> float | None:
-    """The champion's value for `metric`, or None when nothing is in production yet.
+def champion_metric(
+    client: MlflowClient,
+    model_name: str,
+    alias: str,
+    metric: str,
+    *,
+    data_source: str | None = None,
+) -> float | None:
+    """The champion's value for `metric`, or None when there is nothing comparable.
 
     Read from the run that produced the champion, so the gate compares like with like
     rather than against a number typed into a config file.
+
+    `data_source` guards the one comparison that looks valid and is not: a champion
+    trained on synthetic data and a candidate trained on real data are scored on
+    different problems, and a real 2.5% MAPE is not a regression against a synthetic
+    1.7%. Returning None makes the gate treat the candidate as the first model — it
+    still has to beat the naive baseline, which is a real bar on its own data.
     """
     try:
         version = client.get_model_version_by_alias(model_name, alias)
@@ -138,6 +151,18 @@ def champion_metric(client: MlflowClient, model_name: str, alias: str, metric: s
         return None
 
     run = client.get_run(version.run_id)
+    champion_source = run.data.tags.get("data_source")
+    if data_source is not None and champion_source != data_source:
+        logger.warning(
+            "Champion v{} was trained on '{}' data and the candidate on '{}'. Their "
+            "metrics are not comparable, so the regression check is skipped and the "
+            "candidate must beat the naive baseline on its own data.",
+            version.version,
+            champion_source,
+            data_source,
+        )
+        return None
+
     value = run.data.metrics.get(metric)
     if value is None:
         logger.warning("Champion version {} has no '{}' metric logged", version.version, metric)
