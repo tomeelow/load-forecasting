@@ -1,0 +1,121 @@
+name: daily-loop
+
+# The live loop: pull fresh data, score what was served, check for drift, retrain behind
+# the gate. Runners are ephemeral, so the first and last steps carry state in and out —
+# see docs/ADR.md (ADR-008) for why that state lives on a force-pushed orphan branch.
+
+on:
+  schedule:
+    # 05:30 UTC. GitHub's cron is best-effort: runs are delayed under load and dropped
+    # during incidents, which is exactly why the ingest step backfills from its own
+    # last-success marker rather than assuming one day has passed.
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force_retrain:
+        description: "Retrain regardless of cadence or drift flag"
+        type: boolean
+        default: false
+
+# One run at a time. Two concurrent runs would race on the state branch and the loser's
+# work would be silently force-pushed away.
+concurrency:
+  group: daily-loop
+  cancel-in-progress: false
+
+permissions:
+  contents: write # to push the state branch
+
+env:
+  STATE_BRANCH: pipeline-state
+  STATE_PATHS: state mlruns data/processed
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore state from the previous run
+        run: |
+          set -euo pipefail
+          if git fetch --depth=1 origin "$STATE_BRANCH" 2>/dev/null; then
+            git checkout FETCH_HEAD -- $STATE_PATHS
+            echo "Restored state from $STATE_BRANCH"
+            ls -la state/ || true
+          else
+            echo "No $STATE_BRANCH yet — this is a first run and will backfill."
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      # Each step below fails the job on a non-zero exit. That is deliberate: a silent
+      # partial run is the failure mode that makes a scheduled pipeline untrustworthy.
+      - name: Ingest fresh data
+        run: uv run python -m pipelines.ingest
+        env:
+          ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
+
+      - name: Score served predictions against actuals
+        run: uv run python -m pipelines.evaluate
+
+      - name: Check for drift
+        run: uv run python -m pipelines.check_drift
+
+      - name: Retrain if needed, promote only through the gate
+        run: |
+          uv run python -m pipelines.retrain_if_needed \
+            ${{ inputs.force_retrain && '--force' || '' }}
+
+      - name: Reclaim artifacts from pruned runs
+        run: |
+          uv run mlflow gc --backend-store-uri sqlite:///mlruns/mlflow.db || \
+            echo "gc found nothing to reclaim"
+
+      - name: Summarise
+        if: always()
+        run: |
+          echo "### Daily loop" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat state/pipeline_state.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || \
+            echo '{"note": "no state written"}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # Runs even when an earlier step failed, so a drift flag or a scored prediction
+      # is not lost because a later step broke. Nothing is written until a step
+      # succeeds, so persisting after a failure cannot save a half-finished dataset.
+      - name: Persist state for the next run
+        if: always()
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan state-snapshot
+          git rm -rf --cached . >/dev/null
+          git add -f $STATE_PATHS 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No state to persist."
+            exit 0
+          fi
+          git commit -q -m "state snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push --force origin "state-snapshot:$STATE_BRANCH"
+          echo "Pushed state snapshot to $STATE_BRANCH"
+
+      - name: Upload state as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Belt and braces: if the force-push above ever fails or overwrites something
+          # it should not have, the previous 14 days of state are still downloadable.
+          name: pipeline-state-${{ github.run_id }}
+          path: |
+            state
+            monitoring/*.html
+          retention-days: 14
+          if-no-files-found: warn

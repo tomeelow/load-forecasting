@@ -137,3 +137,7 @@ retraining:
   # suddenly, and a model that is never refreshed decays without ever tripping an alarm.
   cadence_days: 7
   tune: true
+  # Tracked runs older than this that no alias points at are deleted, and `mlflow gc`
+  # reclaims their artifacts. Without it the state carried between scheduled runs grows
+  # by several megabytes per retrain and eventually stops being pushable.
+  keep_runs_days: 120

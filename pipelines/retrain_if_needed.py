@@ -28,10 +28,11 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 from loguru import logger
+from mlflow.tracking import MlflowClient
 
 from pipelines.train import train_horizon
 from src.config import Config, load_config
-from src.models.tracking import configure
+from src.models.tracking import configure, prune_runs
 from src.pipeline_state import PipelineState
 
 PIPELINE = "retrain_if_needed"
@@ -93,6 +94,8 @@ def run(
     # exists, and "no" is an answer.
     state.clear_retrain_flag()
     state.record_success(PIPELINE, now)
+
+    prune_runs(MlflowClient(), cfg.mlflow, keep_days=cfg.retraining.keep_runs_days, now=now)
 
     outcome = RetrainOutcome(
         status=PROMOTED if result.promoted else TRAINED_NOT_PROMOTED,
