@@ -114,6 +114,20 @@ def run(
     twice for the same day produces the same file as running once.
     """
     state = state or PipelineState(cfg.state.pipeline_state_path)
+    path = cfg.data.dataset_path
+
+    if not full and not path.exists():
+        # An incremental pull onto nothing produces a dataset containing only the
+        # trailing window — and because the next run re-pulls that same window, it
+        # never grows. A scheduled runner that lost its state would sit there
+        # forever with a fortnight of data and a model that cannot be trained.
+        logger.warning(
+            "No dataset at {} — rebuilding the full configured history instead of "
+            "pulling the trailing window.",
+            path,
+        )
+        full = True
+
     start, end = _window(cfg, full, last_success=state.last_success(PIPELINE))
     run_id = new_run_id()
     logger.info(
@@ -130,11 +144,7 @@ def run(
     weather = _weather(cfg, start, end)
     incoming = build_dataset(load_frame, weather, run_id=run_id, tz=cfg.data.timezone_local)
 
-    path = cfg.data.dataset_path
-    if not full and path.exists():
-        dataset = merge_datasets(read_dataset(path), incoming)
-    else:
-        dataset = incoming
+    dataset = merge_datasets(read_dataset(path), incoming) if path.exists() else incoming
 
     report = validate_dataset(dataset, cfg.validation)
     write_dataset(dataset, path)

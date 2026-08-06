@@ -158,3 +158,29 @@ def test_an_incremental_window_is_the_configured_trailing_repull(tmp_cfg):
 
     assert (end - start).days >= tmp_cfg.ingestion.trailing_repull_days
     assert end > pd.Timestamp.now(tz="UTC")
+
+
+def test_a_runner_with_no_dataset_rebuilds_the_full_history(tmp_cfg, monkeypatch):
+    """A fresh Actions runner must not end up with a fortnight of data forever.
+
+    An incremental pull onto nothing writes only the trailing window, and the next run
+    re-pulls the same window — so without this the dataset never grows past 14 days and
+    training can never happen.
+    """
+    frame = synthetic.make_dataset(start="2024-01-01", end="2024-02-01")
+    windows = []
+    monkeypatch.setattr(ingest, "make_client", lambda: object())
+    monkeypatch.setattr(ingest, "_weather", lambda *a, **k: frame[WEATHER_COLUMNS])
+
+    def record_window(client, country, start, end, aggregation):
+        windows.append((start, end))
+        return frame[[LOAD_COLUMN, FORECAST_COLUMN]]
+
+    monkeypatch.setattr(ingest, "fetch_load_frame", record_window)
+
+    assert not tmp_cfg.data.dataset_path.exists()
+    ingest.run(tmp_cfg, full=False)
+
+    start, end = windows[0]
+    assert (end - start).days > 365, "a missing dataset must trigger a full rebuild"
+    assert start == pd.Timestamp(tmp_cfg.data.start_date, tz=tmp_cfg.data.timezone_local)
