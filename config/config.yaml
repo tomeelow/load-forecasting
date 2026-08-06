@@ -48,9 +48,12 @@ features:
 
 validation:
   # Polish system load sits roughly in this band; anything outside is a data fault,
-  # not a demand record.
+  # not a demand record. The upper bound has headroom over the observed record of
+  # 28,304 MW (2024-01-09, a cold winter morning) — an earlier 28,000 bound rejected
+  # four hours of genuine data, which is the validator working and the config being
+  # wrong rather than the other way round.
   load_min_mw: 10000
-  load_max_mw: 28000
+  load_max_mw: 30000
   temp_min_c: -35.0
   temp_max_c: 45.0
 

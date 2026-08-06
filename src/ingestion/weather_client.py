@@ -120,7 +120,12 @@ def national_weather(frames: dict[str, pd.DataFrame], cities: tuple[City, ...]) 
         w = pd.Series({name: weights[name] for name in wide.columns})
         weighted_sum = wide.mul(w, axis=1).sum(axis=1, skipna=True)
         weight_present = wide.notna().mul(w, axis=1).sum(axis=1)
-        combined[column] = (weighted_sum / weight_present).where(weight_present > 0)
+        average = (weighted_sum / weight_present).where(weight_present > 0)
+        # A weighted mean with non-negative weights lies between the smallest and
+        # largest contributing value, so clipping to them changes nothing mathematically
+        # and removes float division error. Without it, seven cities all reporting 100%
+        # cloud produce 100.00000000000001, which then fails a 0-100 range check.
+        combined[column] = average.clip(wide.min(axis=1), wide.max(axis=1))
 
     national = pd.DataFrame(combined).sort_index()
     national.index.name = "timestamp_utc"

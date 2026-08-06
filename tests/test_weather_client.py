@@ -78,6 +78,29 @@ def test_a_city_with_a_gap_renormalises_rather_than_punching_a_hole():
     assert national["temp_c"].iloc[1] == pytest.approx(10.0)  # Warsaw's weight renormalised to 1
 
 
+def test_the_weighted_mean_cannot_drift_outside_the_values_it_averages():
+    """Seven cities all at 100% cloud must give 100%, not 100.00000000000001.
+
+    Float division by renormalised weights overshoots by ~1e-14, which is invisible
+    until a 0-100 range check rejects 4,369 hours of real data.
+    """
+    frames = {"Warsaw": city_frame([100.0, 0.0]), "Gdansk": city_frame([100.0, 0.0])}
+
+    national = national_weather(frames, cities())
+
+    assert national["temp_c"].tolist() == [100.0, 0.0]
+    assert national["temp_c"].max() <= 100.0
+    assert national["temp_c"].min() >= 0.0
+
+
+def test_the_clip_does_not_distort_a_genuine_average():
+    frames = {"Warsaw": city_frame([10.0]), "Gdansk": city_frame([0.0])}
+
+    national = national_weather(frames, cities())
+
+    assert national["temp_c"].iloc[0] == pytest.approx(6.0)  # 0.6 * 10, still weighted
+
+
 def test_an_unweighted_city_is_rejected():
     frames = {"Warsaw": city_frame([10.0]), "Katowice": city_frame([5.0])}
 
