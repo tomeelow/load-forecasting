@@ -118,6 +118,29 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True)
+class StateConfig:
+    """Where the state that cannot be recomputed lives. See ADR-008."""
+
+    dir: Path
+    prediction_log: str
+    pipeline_state: str
+
+    @property
+    def prediction_log_path(self) -> Path:
+        return self.dir / self.prediction_log
+
+    @property
+    def pipeline_state_path(self) -> Path:
+        return self.dir / self.pipeline_state
+
+
+@dataclass(frozen=True)
+class ServingConfig:
+    max_request_hours: int
+    weather_forecast_days: int
+
+
+@dataclass(frozen=True)
 class Config:
     data: DataConfig
     ingestion: IngestionConfig
@@ -129,6 +152,8 @@ class Config:
     mlflow: MlflowConfig
     backtest: BacktestConfig
     evaluation: EvaluationConfig
+    state: StateConfig
+    serving: ServingConfig
 
 
 def _resolve(path: str) -> Path:
@@ -187,4 +212,9 @@ def load_config(path: Path | None = None) -> Config:
             reports_dir=_resolve(raw["backtest"]["reports_dir"]),
         ),
         evaluation=EvaluationConfig(peak_hours=tuple(raw["evaluation"]["peak_hours"])),
+        state=StateConfig(
+            **{k: v for k, v in raw["state"].items() if k != "dir"},
+            dir=_resolve(raw["state"]["dir"]),
+        ),
+        serving=ServingConfig(**raw["serving"]),
     )

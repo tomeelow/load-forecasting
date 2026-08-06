@@ -58,7 +58,12 @@ ignore = [
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q --strict-markers"
-filterwarnings = ["error::FutureWarning"]
+filterwarnings = [
+    "error::FutureWarning",
+    # starlette's TestClient prefers httpx2; not our code and not worth a dependency
+    # whose only job is to silence a warning.
+    "ignore:Using `httpx` with `starlette.testclient`",
+]
 
 [dependency-groups]
 dev = [

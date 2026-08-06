@@ -97,3 +97,17 @@ backtest:
 
 evaluation:
   peak_hours: [7, 22]             # local clock, start inclusive and end exclusive
+
+state:
+  # Everything that cannot be recomputed from the source APIs. Survives between
+  # scheduled runs by the mechanism in ADR-008.
+  dir: state
+  prediction_log: predictions.db
+  pipeline_state: pipeline_state.json
+
+serving:
+  # How many hourly forecasts one request may ask for, counted from local midnight.
+  max_request_hours: 48
+  # Open-Meteo forecast days to pull per request. The target hours a day-ahead model
+  # can actually reach are bounded by the freshness of the ingested actuals, not by this.
+  weather_forecast_days: 3
