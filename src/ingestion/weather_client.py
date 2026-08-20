@@ -11,11 +11,13 @@ national demand far better than an unweighted mean of seven cities.
 
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import requests
 from loguru import logger
 
-from src.config import City, WeatherConfig
+from src.config import City, RequestConfig, WeatherConfig
 
 # Open-Meteo variable -> our column name. `wind_speed_unit=ms` below is what makes
 # `wind_ms` true: Open-Meteo defaults to km/h.
@@ -26,7 +28,18 @@ COLUMN_NAMES = {
     "relative_humidity_2m": "humidity_pct",
 }
 
-REQUEST_TIMEOUT_S = 60
+# Statuses worth trying again: a timeout, a rate limit, or a server that is briefly
+# unwell. Everything else in 4xx says the request itself is wrong, and repeating a
+# malformed request five times only delays the error by a minute.
+RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+# Transport failures that are, by nature, worth another attempt: the connection never
+# opened, the response never finished, or it took too long.
+RETRYABLE_ERRORS = (
+    requests.ConnectionError,
+    requests.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
 
 
 def parse_hourly(payload: dict, variables: tuple[str, ...]) -> pd.DataFrame:
@@ -47,10 +60,62 @@ def parse_hourly(payload: dict, variables: tuple[str, ...]) -> pd.DataFrame:
     return frame.rename(columns=COLUMN_NAMES).sort_index()
 
 
-def _get(url: str, params: dict) -> dict:
-    response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT_S)
-    response.raise_for_status()
-    return response.json()
+def _retry_after(error: requests.HTTPError) -> float | None:
+    """The server's own `Retry-After`, in seconds, when it sent one.
+
+    A rate limiter knows better than our backoff curve does how long it wants to be
+    left alone, and Open-Meteo does rate-limit the free tier.
+    """
+    response = getattr(error, "response", None)
+    if response is None:
+        return None
+    try:
+        return float(response.headers.get("Retry-After"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _get(url: str, params: dict, request: RequestConfig) -> dict:
+    """GET one Open-Meteo endpoint, retrying transient failures with exponential backoff.
+
+    The nightly loop makes fourteen of these calls (seven cities, two endpoints) against
+    a free service with no availability promise. Without this, one connection reset ends
+    the run, the last-success marker stays where it was, and the next run has a wider
+    window to backfill — recoverable, but a night of monitoring is lost for a hiccup that
+    a two-second pause would have absorbed.
+
+    Only transient failures are retried; a 400 is raised on the first attempt.
+    """
+    last: Exception | None = None
+    for attempt in range(1, request.max_attempts + 1):
+        pause = request.pause_before(attempt + 1)
+        try:
+            response = requests.get(url, params=params, timeout=request.timeout_s)
+            response.raise_for_status()
+            return response.json()
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status not in RETRYABLE_STATUS:
+                raise
+            last = exc
+            pause = _retry_after(exc) or pause
+        except RETRYABLE_ERRORS as exc:
+            last = exc
+
+        if attempt == request.max_attempts:
+            break
+        logger.warning(
+            "Open-Meteo {} failed (attempt {}/{}): {}. Retrying in {:.1f}s",
+            url,
+            attempt,
+            request.max_attempts,
+            last,
+            pause,
+        )
+        time.sleep(pause)
+
+    logger.error("Open-Meteo {} failed after {} attempt(s): {}", url, request.max_attempts, last)
+    raise last
 
 
 def fetch_city_archive(
@@ -68,6 +133,7 @@ def fetch_city_archive(
             "wind_speed_unit": "ms",
             "timezone": "UTC",
         },
+        cfg.request,
     )
     return parse_hourly(payload, cfg.variables)
 
@@ -95,6 +161,7 @@ def fetch_city_forecast(
             "wind_speed_unit": "ms",
             "timezone": "UTC",
         },
+        cfg.request,
     )
     return parse_hourly(payload, cfg.variables)
 

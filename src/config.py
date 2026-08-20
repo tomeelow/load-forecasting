@@ -49,11 +49,37 @@ class IngestionConfig:
 
 
 @dataclass(frozen=True)
+class RequestConfig:
+    """How hard an HTTP client tries before giving up on a transient failure."""
+
+    timeout_s: float
+    max_attempts: int
+    backoff_s: float
+    backoff_max_s: float
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError(f"max_attempts must be at least 1, got {self.max_attempts}")
+        if self.timeout_s <= 0:
+            raise ValueError(f"timeout_s must be positive, got {self.timeout_s}")
+        if self.backoff_s < 0 or self.backoff_max_s < self.backoff_s:
+            raise ValueError(
+                f"backoff_s must be non-negative and no larger than backoff_max_s, "
+                f"got {self.backoff_s} and {self.backoff_max_s}"
+            )
+
+    def pause_before(self, attempt: int) -> float:
+        """Seconds to wait before `attempt` (2 is the first retry): exponential, capped."""
+        return min(self.backoff_s * 2 ** (attempt - 2), self.backoff_max_s)
+
+
+@dataclass(frozen=True)
 class WeatherConfig:
     archive_url: str
     forecast_url: str
     variables: tuple[str, ...]
     cities: tuple[City, ...]
+    request: RequestConfig
 
 
 @dataclass(frozen=True)
@@ -220,6 +246,7 @@ def load_config(path: Path | None = None) -> Config:
             forecast_url=weather["forecast_url"],
             variables=tuple(weather["variables"]),
             cities=cities,
+            request=RequestConfig(**weather["request"]),
         ),
         features=FeaturesConfig(**raw["features"]),
         validation=ValidationConfig(**raw["validation"]),
