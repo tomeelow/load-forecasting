@@ -219,9 +219,7 @@ def _optional(value: object) -> float | None:
     return None if value is None or pd.isna(value) else round(float(value), 1)
 
 
-def _log_predictions(
-    service: Service, features: pd.DataFrame, predicted: pd.DataFrame
-) -> None:
+def _log_predictions(service: Service, features: pd.DataFrame, predicted: pd.DataFrame) -> None:
     """Persist what was served, with the exact inputs that produced it."""
     champion = service.champion
     made_at = datetime.now(UTC)
