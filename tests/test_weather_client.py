@@ -286,3 +286,96 @@ def test_a_policy_that_could_never_retry_is_rejected():
 def test_a_backoff_ceiling_below_the_first_pause_is_rejected():
     with pytest.raises(ValueError, match="backoff"):
         policy(backoff_s=10.0, backoff_max_s=1.0)
+
+
+# --- Chunking the archive pull ---------------------------------------------------
+#
+# A rebuild asks for the whole configured history. As one request per city that is a
+# response the server takes minutes to begin, and every retry starts it again — which
+# is how the first CI rebuild burned five attempts on a read timeout.
+
+
+def test_a_long_range_is_split_into_consecutive_closed_windows():
+    chunks = weather_client.date_chunks("2019-01-01", "2021-06-30", days=365)
+
+    assert chunks[0][0] == "2019-01-01"
+    assert chunks[-1][1] == "2021-06-30"
+    # Consecutive and non-overlapping: each window starts the day after the last ended.
+    for (_, ends), (starts, _) in zip(chunks, chunks[1:], strict=False):
+        assert pd.Timestamp(starts) - pd.Timestamp(ends) == pd.Timedelta(days=1)
+
+
+def test_a_range_inside_one_window_is_a_single_request():
+    assert weather_client.date_chunks("2024-01-01", "2024-01-31") == [("2024-01-01", "2024-01-31")]
+
+
+def test_a_backwards_range_asks_for_nothing():
+    assert weather_client.date_chunks("2024-02-01", "2024-01-01") == []
+
+
+def test_the_archive_pull_asks_year_by_year_and_returns_one_series(monkeypatch, cfg):
+    """Seven years in one request is what timed out; seven requests of a year do not."""
+    monkeypatch.setattr(weather_client.time, "sleep", lambda _: None)
+    asked = []
+
+    def get(url, params=None, timeout=None):
+        asked.append((params["start_date"], params["end_date"]))
+        index = pd.date_range(
+            params["start_date"], f"{params['end_date']} 23:00", freq="1h", tz="UTC"
+        )
+        return http_response(
+            200,
+            {
+                "utc_offset_seconds": 0,
+                "hourly": {
+                    "time": [t.strftime("%Y-%m-%dT%H:%M") for t in index],
+                    **{v: [10.0] * len(index) for v in cfg.weather.variables},
+                },
+            },
+        )
+
+    monkeypatch.setattr(weather_client.requests, "get", get)
+
+    frame = weather_client.fetch_city_archive(
+        cfg.weather.cities[0], "2019-01-01", "2021-01-01", cfg.weather
+    )
+
+    assert len(asked) == 3, f"expected a request per year, got {asked}"
+    assert frame.index.is_monotonic_increasing
+    assert not frame.index.has_duplicates
+    # The joins between windows are ordinary hours, not gaps.
+    assert frame.index.to_series().diff().dropna().max() == pd.Timedelta(hours=1)
+
+
+def test_one_slow_year_does_not_restart_the_others(monkeypatch, cfg):
+    """The point of chunking: a timeout costs one window, not the whole history."""
+    monkeypatch.setattr(weather_client.time, "sleep", lambda _: None)
+    attempts = {}
+
+    def get(url, params=None, timeout=None):
+        window = params["start_date"]
+        attempts[window] = attempts.get(window, 0) + 1
+        if window == "2020-01-01" and attempts[window] == 1:
+            raise requests.Timeout("archive was slow")
+        index = pd.date_range(
+            params["start_date"], f"{params['end_date']} 23:00", freq="1h", tz="UTC"
+        )
+        return http_response(
+            200,
+            {
+                "utc_offset_seconds": 0,
+                "hourly": {
+                    "time": [t.strftime("%Y-%m-%dT%H:%M") for t in index],
+                    **{v: [10.0] * len(index) for v in cfg.weather.variables},
+                },
+            },
+        )
+
+    monkeypatch.setattr(weather_client.requests, "get", get)
+
+    weather_client.fetch_city_archive(
+        cfg.weather.cities[0], "2019-01-01", "2021-01-01", cfg.weather
+    )
+
+    assert attempts["2020-01-01"] == 2  # retried
+    assert attempts["2019-01-01"] == 1  # and the year before it was not re-fetched

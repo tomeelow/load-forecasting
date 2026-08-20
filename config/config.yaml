@@ -30,7 +30,10 @@ weather:
   # retried with exponential backoff. A 4xx other than 429 is a malformed request, not
   # bad luck, and is raised immediately rather than retried five times.
   request:
-    timeout_s: 30                 # requests' connect/read timeout, per attempt
+    # requests' connect/read timeout, per attempt. 30 was too tight: a rebuild asks the
+    # archive for years at a time and the first CI rebuild timed out five times over.
+    # The pull is chunked now, but the margin is cheap and a slow response is not a fault.
+    timeout_s: 60
     max_attempts: 5               # 1 try plus 4 retries
     backoff_s: 1.0                # first pause; doubles each attempt
     backoff_max_s: 30.0           # ceiling, so a long outage fails in minutes not hours
