@@ -216,6 +216,23 @@ def _resolve(path: str) -> Path:
     return p if p.is_absolute() else REPO_ROOT / p
 
 
+SQLITE_PREFIX = "sqlite:///"
+
+
+def _resolve_tracking_uri(uri: str) -> str:
+    """Anchor a relative SQLite tracking URI to the repository root.
+
+    `sqlite:///mlruns/mlflow.db` is relative to the *working directory*, so the same
+    command run from a subdirectory silently creates a second, empty store — a fresh
+    registry with no champion in it, and a training run that promotes itself against
+    nothing. Every other configured path is resolved against the repo root; this one
+    was the exception, which is how a stray mlflow.db came to sit in the project root.
+    """
+    if not uri.startswith(SQLITE_PREFIX):
+        return uri
+    return f"{SQLITE_PREFIX}{_resolve(uri.removeprefix(SQLITE_PREFIX))}"
+
+
 def load_config(path: Path | None = None) -> Config:
     """Read and validate the pipeline configuration."""
     raw = yaml.safe_load((path or DEFAULT_CONFIG_PATH).read_text())
@@ -261,7 +278,10 @@ def load_config(path: Path | None = None) -> Config:
             tuning=TuningConfig(**raw["model"]["tuning"]),
         ),
         promotion=PromotionConfig(**raw["promotion"]),
-        mlflow=MlflowConfig(**raw["mlflow"]),
+        mlflow=MlflowConfig(
+            **{k: v for k, v in raw["mlflow"].items() if k != "tracking_uri"},
+            tracking_uri=_resolve_tracking_uri(raw["mlflow"]["tracking_uri"]),
+        ),
         backtest=BacktestConfig(
             **{k: v for k, v in raw["backtest"].items() if k != "reports_dir"},
             reports_dir=_resolve(raw["backtest"]["reports_dir"]),
