@@ -14,7 +14,7 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
-        args: [--maxkb=500]   # datasets and model binaries belong in DVC / MLflow
+        args: [--maxkb=500]   # datasets and model binaries belong in MLflow, not git
       - id: detect-private-key
       - id: no-commit-to-branch
         args: [--branch, main]

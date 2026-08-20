@@ -37,8 +37,8 @@ CANONICAL_COLUMNS = [
 def new_run_id() -> str:
     """Identifier for one ingestion run, stored per row as `data_source_version`.
 
-    Provenance: a row tells you which run produced it, which pairs with the DVC hash
-    of the file to answer "what exactly was this model trained on".
+    Provenance: a row tells you which run last wrote it, which pairs with the content
+    fingerprint of the whole file to answer "what exactly was this model trained on".
     """
     return datetime.now(UTC).strftime("run-%Y%m%dT%H%M%SZ")
 
@@ -141,7 +141,10 @@ def dataset_fingerprint(df: pd.DataFrame) -> str:
     Content-addressed rather than a filename or a timestamp: ENTSO-E revises published
     actuals, so "the dataset" changes underneath a fixed path. Without this, a metric
     that moved between two runs cannot be attributed to the model or to the data.
-    Stands in for the DVC hash until DVC is wired up.
+
+    This detects a change; it does not preserve the old bytes. That trade — no DVC, no
+    remote, no bill, in exchange for "we can tell you the data differed but not hand it
+    back" — is ADR-003, and it holds only because the dataset is re-pullable for free.
     """
     digest = sha256(pd.util.hash_pandas_object(df, index=True).to_numpy().tobytes())
     return digest.hexdigest()[:12]

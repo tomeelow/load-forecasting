@@ -115,9 +115,12 @@ re-evaluation.
 
 ---
 
-## ADR-003 — MLflow registry + DVC, not hand-saved artifact files
+## ADR-003 — MLflow registry plus a dataset content hash, not hand-saved artifact files
 
-**Status:** accepted · **Date:** 2026-08-05
+**Status:** accepted · **Date:** 2026-08-05 · **Amended:** 2026-08-20 (DVC dropped in
+favour of a content fingerprint; see *Why the dataset is fingerprinted rather than
+DVC-tracked* below) · **Supersedes:** the plan's `dvc.yaml` in
+`docs/load_forecasting_mlops_plan.md`
 
 ### Context
 
@@ -128,9 +131,13 @@ the previous one back in a hurry.
 ### Decision
 
 Every training run is logged to MLflow with params, metrics, dataset version and a
-model signature; promotion to `@champion` happens through the registry. Raw and
-processed datasets are versioned with DVC, and the DVC hash is logged as a run
-parameter so the model points at the exact bytes it was trained on.
+model signature; promotion to `@champion` happens through the registry.
+
+The dataset is identified by a **content hash computed at training time** —
+`dataset_fingerprint()` in `src/ingestion/dataset.py`, a SHA-256 over the hashed rows
+and index, truncated to 12 hex characters — and logged as the `dataset_version`
+parameter of every run. Each row additionally carries `data_source_version`, the id of
+the ingestion run that last wrote it. No DVC.
 
 ### Reasoning
 
@@ -148,24 +155,45 @@ moving an alias, not rebuilding an environment. Combined with the promotion gate
 (Phase 4), automated retraining becomes safe to leave unattended — a scheduled retrain
 that produces a worse model logs its run and leaves production untouched.
 
-DVC rather than committing parquet: the processed dataset is tens of megabytes and
-grows daily; git would bloat irrecoverably, and `.gitignore` already blocks `data/`.
+### Why the dataset is fingerprinted rather than DVC-tracked
+
+The original decision named DVC, and the plan carries a `dvc.yaml`. It was not
+implemented, and this ADR is amended rather than left standing because a record that
+describes a system nobody built is worse than no record.
+
+DVC's value is a *content-addressed store*: the hash in git resolves to the exact bytes
+through a remote. Without a remote it is a local cache with extra files, and a remote
+means an S3 or GDrive account, credentials in repository secrets, and a bill — rejected
+for the same reason as in ADR-008, that the whole loop is supposed to run for free. A
+committed `.dvc` file pointing at a remote nobody configured would be ceremony: it looks
+like data versioning in a screenshot and answers no question at 6am.
+
+What the fingerprint buys, and it is the property the reasoning above actually needs, is
+**detection**: two runs with the same `dataset_version` saw byte-identical data, and two
+runs with different ones did not. That is what separates "the model regressed" from "the
+trailing window was revised underneath it".
 
 ### Consequences
 
-- Local development needs an MLflow tracking server running (containerised in Phase 10),
-  which is friction compared to writing a pickle.
-- Two systems of record instead of one: MLflow for models, DVC for data. The link
-  between them is a logged parameter, and it is only as reliable as the discipline of
-  logging it — so the training entrypoint sets it, never the human.
+- **The old bytes are not retrievable.** The fingerprint proves the data differed; it
+  cannot reproduce it. `data/processed/` is carried between scheduled runs as a single
+  snapshot (ADR-008), so yesterday's copy is gone. Re-pulling from ENTSO-E reconstructs
+  everything except the revisions themselves — which is exactly the part a fingerprint
+  can only detect. This is the real cost of the choice and it is accepted knowingly: on
+  this project the dataset is reproducible from a free API in about five minutes, and
+  the fingerprint tells us when it stopped matching.
+- Local development needs an MLflow store (SQLite here, containerised Postgres in
+  Phase 10), which is friction compared to writing a pickle.
+- The link between model and data is a logged parameter, and it is only as reliable as
+  the discipline of logging it — so the training entrypoint sets it, never the human.
 
 ### What would change our mind
 
-Little at this scale. If the project ever needed multi-tenant model governance or
-approval workflows, a heavier platform would displace the registry — but not the
-principle.
-
----
+Two things, separately. A dataset that stops being cheaply reproducible — a paid feed, a
+scraped source, or one whose revisions matter enough to audit — makes a content-addressed
+store worth its remote, and DVC (or `lakeFS`, or plain versioned object storage) comes
+back. Multi-tenant model governance or approval workflows would displace the registry —
+but not the principle.
 
 ## ADR-004 — Evidently for drift detection, not a hand-rolled check
 

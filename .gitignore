@@ -1,4 +1,5 @@
-# Data and model artifacts — tracked by DVC / MLflow, never by git
+# Data and model artifacts — MLflow holds the models, the dataset is content-hashed
+# per run and re-pullable from the source APIs (ADR-003). Never git.
 data/
 *.parquet
 *.csv

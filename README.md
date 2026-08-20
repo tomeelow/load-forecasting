@@ -236,8 +236,12 @@ docs/            plan + architecture decision record
 
 ## Decisions
 
-Seven load-bearing choices are recorded with their reasoning in
+Nine load-bearing choices are recorded with their reasoning in
 [`docs/ADR.md`](docs/ADR.md): LightGBM over Prophet/SARIMA, direct per-horizon
-forecasting over recursive, MLflow + DVC over ad-hoc artifact files, Evidently over a
-hand-rolled drift check, indexing feature rows by target hour, embargoing one horizon
-between training and test blocks, and tuning once per backtest rather than per origin.
+forecasting over recursive, an MLflow registry plus a dataset content hash over ad-hoc
+artifact files (and over DVC, which would need a remote nobody is paying for),
+Evidently over a hand-rolled drift check, indexing feature rows by target hour,
+embargoing one horizon between training and test blocks, tuning once per backtest
+rather than per origin, carrying pipeline state on a force-pushed orphan branch, and
+measuring drift against the same weeks in previous years rather than against last
+fortnight.
