@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore state from the previous run
         run: |
@@ -48,7 +48,7 @@ jobs:
             echo "No $STATE_BRANCH yet — this is a first run and will backfill."
           fi
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
 
@@ -109,7 +109,7 @@ jobs:
 
       - name: Upload state as an artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Belt and braces: if the force-push above ever fails or overwrites something
           # it should not have, the previous 14 days of state are still downloadable.
