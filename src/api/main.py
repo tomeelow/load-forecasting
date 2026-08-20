@@ -168,7 +168,7 @@ def create_app(cfg: Config | None = None, *, load_model_on_startup: bool = True)
             )
 
         predicted = svc.champion.predict(features)
-        _log_predictions(svc, features, predicted, targets)
+        _log_predictions(svc, features, predicted)
 
         note = None
         if len(predicted) < len(targets):
@@ -220,10 +220,7 @@ def _optional(value: object) -> float | None:
 
 
 def _log_predictions(
-    service: Service,
-    features: pd.DataFrame,
-    predicted: pd.DataFrame,
-    targets: pd.DatetimeIndex,
+    service: Service, features: pd.DataFrame, predicted: pd.DataFrame
 ) -> None:
     """Persist what was served, with the exact inputs that produced it."""
     champion = service.champion

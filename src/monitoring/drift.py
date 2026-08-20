@@ -114,7 +114,7 @@ class DriftResult:
         return "\n".join(lines)
 
 
-def _drift_from_snapshot(payload: dict, threshold: float) -> tuple[list[str], float | None]:
+def _drift_from_snapshot(payload: dict) -> tuple[list[str], float | None]:
     """Pull the drifted column names and the drifted share out of an Evidently result."""
     drifted: list[str] = []
     share: float | None = None
@@ -210,7 +210,7 @@ def check_drift(
         report_path = settings.reports_dir / f"drift_{now:%Y%m%dT%H%M%S}.html"
 
     payload = _evidently_report(inputs.loc[current_index], inputs.loc[reference.index], report_path)
-    drifted, share = _drift_from_snapshot(payload, settings.drift_share_threshold)
+    drifted, share = _drift_from_snapshot(payload)
     data_drift = share is not None and share >= settings.drift_share_threshold
 
     performance = _performance(cfg, log, current_start, now)
@@ -292,7 +292,7 @@ def _prediction_drift(
     payload = _evidently_report(
         current[["load_mw"]].astype("float64"), previous[["load_mw"]].astype("float64"), None
     )
-    drifted, _ = _drift_from_snapshot(payload, 0.5)
+    drifted, _ = _drift_from_snapshot(payload)
     return "load_mw" in drifted
 
 
