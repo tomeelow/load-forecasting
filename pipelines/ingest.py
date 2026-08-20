@@ -128,8 +128,7 @@ def _rebuild_reason(cfg: Config, existing: pd.DataFrame | None) -> str | None:
     return (
         f"the stored dataset holds {len(existing)} hours, short of the {needed} a "
         f"{cfg.model.validation_days}-day validation split needs, and starts "
-        f"{existing.index.min():%Y-%m-%d} rather than the configured "
-        f"{configured_start:%Y-%m-%d}"
+        f"{existing.index.min():%Y-%m-%d} rather than the configured {cfg.data.start_date}"
     )
 
 
