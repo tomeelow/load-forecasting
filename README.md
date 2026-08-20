@@ -80,10 +80,10 @@ to be worth knowing before anyone spends a day on hyperparameters.
 
 | Data | Source | Resolution | Range | Notes |
 |---|---|---|---|---|
-| Actual total load (PL) | ENTSO-E Transparency Platform | native 15-min or 60-min → resampled to hourly | configured in [`config/config.yaml`](config/config.yaml) | the target |
+| Actual total load (PL) | ENTSO-E Transparency Platform | native 15-min or 60-min → resampled to hourly | 2019-01-01 → now (start date in [`config/config.yaml`](config/config.yaml)) | the target |
 | Day-ahead load forecast (PL) | ENTSO-E Transparency Platform | hourly | same | the benchmark (PSE) |
-| Historical weather | Open-Meteo Archive API | hourly | same | 7 cities, population-weighted |
-| Forecast weather | Open-Meteo Forecast API | hourly | rolling | used at serving time |
+| Historical weather | Open-Meteo Archive API | hourly | same, up to ~5 days behind real time | 7 cities, population-weighted |
+| Forecast weather | Open-Meteo Forecast API | hourly | the days the archive has not reached, plus the future | used at serving time and for the freshest ingested hours |
 | Public holidays | `holidays` (PL), offline | daily | — | evaluated on the **Europe/Warsaw** calendar date |
 
 Everything is stored and computed on a **UTC** hourly index. `Europe/Warsaw` is used
@@ -200,10 +200,12 @@ carries state between runs — see [ADR-008](docs/ADR.md). Trigger one by hand w
 gh workflow run daily-loop.yml -f force_retrain=false
 ```
 
-Without an `ENTSOE_API_KEY`, both pipelines fall back to the synthetic generator in
-[src/synthetic.py](src/synthetic.py) so the loop runs end to end. Those runs are named
-`*_synthetic`, tagged `data_source=synthetic` in MLflow, and their reports carry a
-warning banner — a metric from invented data measures the plumbing, nothing else.
+`pipelines.ingest` needs an `ENTSOE_API_KEY` and stops without one — there is nothing
+honest for it to pull. Training and the backtest do not: with no dataset on disk they
+fall back to the synthetic generator in [src/synthetic.py](src/synthetic.py) so the
+rest of the loop still runs end to end. Those runs are named `*_synthetic`, tagged
+`data_source=synthetic` in MLflow, and their reports carry a warning banner — a metric
+from invented data measures the plumbing, nothing else.
 
 **TODO** — `docker compose up` for the full stack (Phase 10).
 
@@ -225,13 +227,18 @@ src/ingestion/   ENTSO-E + Open-Meteo clients, dataset assembly, validation
 src/features/    leakage-safe feature builder (shared by training and serving)
 src/models/      baselines, LightGBM, tuning, promotion gate, MLflow tracking
 src/evaluation/  metrics, chronological splits, rolling-origin backtest
-src/api/         FastAPI service                        (Phase 6, empty)
-src/monitoring/  Evidently drift + performance reports  (Phase 8, empty)
-pipelines/       runnable entrypoints (ingest, train, backtest)
-reports/         generated benchmark tables
-config/          pipeline parameters (dates, cities, horizon, bounds)
-tests/           leakage, DST, validation and ingestion tests
+src/api/         FastAPI service: /forecast, /health, /reload-model
+src/monitoring/  Evidently drift, the seasonal reference window, rolling performance
+src/             prediction log, pipeline state, holiday calendar, synthetic generator
+pipelines/       ingest, train, backtest + the loop: evaluate, check_drift,
+                 retrain_if_needed
+config/          pipeline parameters (dates, cities, horizon, thresholds, bounds)
+tests/           leakage, DST, timezone, validation, retry, gate and loop tests
 docs/            plan + architecture decision record
+reports/         generated benchmark tables (the .md files are versioned)
+monitoring/      generated drift reports (HTML, not versioned)
+state/           prediction log and last-success markers (not versioned; ADR-008)
+mlruns/          MLflow tracking database and artifacts (not versioned)
 ```
 
 ## Decisions
