@@ -502,9 +502,11 @@ Two supporting decisions fall out of it:
   `hour` cannot drift — testing it asks whether two windows happen to contain a whole
   number of days, and a fortnight ending mid-afternoon fails that every time. `month` is
   worse: the seasonal reference pads each historical window by a week, so the month mix
-  differs *by construction* and drift is reported with certainty. Running the check with
-  them included on real data flagged nine features, all of them artifacts, which buried
-  the four that had actually moved.
+  differs *by construction* and drift is reported with certainty. Including them adds
+  nine columns that cannot carry information about the model and can only dilute the
+  drifted share, which is what the trigger reads. (An earlier version of this bullet
+  quoted a count of features that "had actually moved"; that number came from the
+  inverted comparison described in the correction below and is withdrawn.)
 - **Performance is the decisive signal, not input drift.** Rolling error of served
   predictions against actuals has no seasonal confound at all. Input drift is an early
   warning that may or may not matter; a model getting worse is proof that it does.
