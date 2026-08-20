@@ -14,8 +14,10 @@ mlruns/
 mlartifacts/
 mlflow.db
 
-# Monitoring and evaluation output
-monitoring/reports/
+# Monitoring and evaluation output. `monitoring.reports_dir` writes the drift HTML
+# straight into monitoring/, and one Evidently report is four megabytes — they are
+# generated per run and uploaded as workflow artifacts, never committed.
+monitoring/*.html
 # Evaluation output: the generated benchmark tables are deliverables and are
 # versioned; the prediction dumps behind them are not.
 reports/*
