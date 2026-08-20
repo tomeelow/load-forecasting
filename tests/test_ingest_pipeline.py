@@ -11,6 +11,7 @@ import dataclasses
 
 import pandas as pd
 import pytest
+import requests
 
 from pipelines import ingest
 from src import synthetic
@@ -144,6 +145,29 @@ def test_a_successful_ingest_records_its_marker(tmp_cfg, tmp_path, monkeypatch):
     assert state.last_success(ingest.PIPELINE) is None
     ingest.run(tmp_cfg, full=True, state=state)
     assert state.last_success(ingest.PIPELINE) is not None
+
+
+def test_a_run_that_fails_leaves_the_marker_where_it_was(tmp_cfg, monkeypatch):
+    """The marker means "this window is stored", so a crash must not advance it.
+
+    If a failed pull recorded success anyway, the next run would start from the moment
+    of the failure and the hours it never wrote would never be asked for again.
+    """
+    frame = synthetic.make_dataset(start="2024-01-01", end="2024-02-01")
+    stub_sources(monkeypatch, frame)
+    state = PipelineState(tmp_cfg.state.pipeline_state_path)
+    ingest.run(tmp_cfg, full=True, state=state)
+    marker = state.last_success(ingest.PIPELINE)
+
+    def explode(*args, **kwargs):
+        raise requests.ConnectionError("open-meteo went away for good")
+
+    monkeypatch.setattr(ingest, "_weather", explode)
+
+    with pytest.raises(requests.ConnectionError):
+        ingest.run(tmp_cfg, full=False, state=state)
+
+    assert state.last_success(ingest.PIPELINE) == marker
 
 
 def test_a_lost_marker_still_backfills_from_what_the_data_says(tmp_cfg, monkeypatch):
