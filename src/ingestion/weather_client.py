@@ -41,6 +41,14 @@ RETRYABLE_ERRORS = (
     requests.exceptions.ChunkedEncodingError,
 )
 
+# The archive is asked for the whole configured history whenever a rebuild happens —
+# seven years, seven cities. As one request per city that is a response Open-Meteo takes
+# longer than any sane timeout to begin, and a retry restarts the whole thing: the first
+# CI rebuild spent five attempts and three minutes failing on exactly that. A year per
+# request keeps every response small, so a timeout costs one year rather than all of
+# them. entsoe-py chunks its own long ranges for the same reason.
+ARCHIVE_CHUNK_DAYS = 365
+
 
 def parse_hourly(payload: dict, variables: tuple[str, ...]) -> pd.DataFrame:
     """Turn an Open-Meteo hourly response into a UTC-indexed frame with our column names."""
@@ -118,24 +126,52 @@ def _get(url: str, params: dict, request: RequestConfig) -> dict:
     raise last
 
 
+def date_chunks(start_date: str, end_date: str, days: int = ARCHIVE_CHUNK_DAYS) -> list[tuple]:
+    """Split a closed date range into consecutive windows of at most `days` days."""
+    start, end = pd.Timestamp(start_date), pd.Timestamp(end_date)
+    if start > end:
+        return []
+    chunks = []
+    while start <= end:
+        stop = min(start + pd.Timedelta(days=days - 1), end)
+        chunks.append((start.strftime("%Y-%m-%d"), stop.strftime("%Y-%m-%d")))
+        start = stop + pd.Timedelta(days=1)
+    return chunks
+
+
 def fetch_city_archive(
     city: City, start_date: str, end_date: str, cfg: WeatherConfig
 ) -> pd.DataFrame:
-    """Observed hourly weather for one city over a closed date range."""
-    payload = _get(
-        cfg.archive_url,
-        {
-            "latitude": city.lat,
-            "longitude": city.lon,
-            "start_date": start_date,
-            "end_date": end_date,
-            "hourly": ",".join(cfg.variables),
-            "wind_speed_unit": "ms",
-            "timezone": "UTC",
-        },
-        cfg.request,
-    )
-    return parse_hourly(payload, cfg.variables)
+    """Observed hourly weather for one city over a closed date range.
+
+    Requested a year at a time; see `ARCHIVE_CHUNK_DAYS`. The windows are consecutive
+    and closed on both ends, so the concatenation is the same continuous series a single
+    request would have returned.
+    """
+    frames = [
+        parse_hourly(
+            _get(
+                cfg.archive_url,
+                {
+                    "latitude": city.lat,
+                    "longitude": city.lon,
+                    "start_date": chunk_start,
+                    "end_date": chunk_end,
+                    "hourly": ",".join(cfg.variables),
+                    "wind_speed_unit": "ms",
+                    "timezone": "UTC",
+                },
+                cfg.request,
+            ),
+            cfg.variables,
+        )
+        for chunk_start, chunk_end in date_chunks(start_date, end_date)
+    ]
+    if not frames:
+        raise ValueError(f"Archive range ends before it starts: {start_date} to {end_date}")
+
+    combined = pd.concat(frames).sort_index()
+    return combined[~combined.index.duplicated(keep="last")]
 
 
 def fetch_city_forecast(
