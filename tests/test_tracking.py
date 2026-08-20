@@ -7,6 +7,7 @@ champion's metric can be read back, and that the alias only moves when the gate 
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import mlflow
@@ -307,3 +308,22 @@ def test_an_absolute_store_is_left_alone(tmp_path):
 
     assert _resolve_tracking_uri(absolute) == absolute
     assert _resolve_tracking_uri("postgresql://user@host/mlflow") == "postgresql://user@host/mlflow"
+
+
+def test_the_unconfigured_default_store_lands_outside_the_repository():
+    """MLflow's unconfigured default is `sqlite:///mlflow.db` in the working directory.
+
+    Tests run from the repository root, so without the session fixture that redirects it,
+    every monkeypatched `configure` and every bare `MlflowClient()` leaves a stray, empty
+    registry next to the source — which is how the orphan store this project used to
+    carry was created in the first place.
+
+    The *configured* store is deliberately inside the repository (`mlruns/`); what must
+    not be is the fallback nobody chose.
+    """
+    from src.config import REPO_ROOT
+
+    fallback = Path(os.environ["MLFLOW_TRACKING_URI"].removeprefix("sqlite:///"))
+
+    assert REPO_ROOT not in fallback.parents
+    assert not (REPO_ROOT / "mlflow.db").exists(), "a stray store was written to the repo root"
