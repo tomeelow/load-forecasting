@@ -150,8 +150,9 @@ feature builder is horizon-parametrised so the same code path serves both.
 **The two paths do disagree.** A full ingest keeps archive values wherever the archive
 reaches (it lags real time by about five days) and fills the rest from the forecast
 endpoint, so the freshest hours of the stored dataset are forecast-sourced and can be
-compared against the archive once it catches up. For the 192 such hours in the current
-dataset (2026-07-30 → 2026-08-06):
+compared against the archive once it catches up. Measured on the dataset as it stood
+after the 2026-08-06 ingest, over the 192 forecast-sourced hours it then held
+(2026-07-30 → 2026-08-06):
 
 | Feature | MAE | RMSE | Bias |
 |---|---|---|---|
