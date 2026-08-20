@@ -101,9 +101,61 @@ The ingestion layer keeps both paths available
 archive fetch and a forecast fetch producing the identical column set), and the
 feature builder is horizon-parametrised so the same code path serves both.
 
-**TODO** — quantify the gap: backtest once with observed weather and once with
-forecast-aligned weather, and report both numbers here rather than only the
-flattering one.
+### What the ingested data can and cannot say about it
+
+**The two paths do disagree.** A full ingest keeps archive values wherever the archive
+reaches (it lags real time by about five days) and fills the rest from the forecast
+endpoint, so the freshest hours of the stored dataset are forecast-sourced and can be
+compared against the archive once it catches up. For the 192 such hours in the current
+dataset (2026-07-30 → 2026-08-06):
+
+| Feature | MAE | RMSE | Bias |
+|---|---|---|---|
+| `temp_c` | 0.90 °C | 1.14 °C | +0.64 °C |
+| `wind_ms` | 0.35 m/s | 0.49 m/s | +0.13 m/s |
+| `cloud_cover` | 17.4 pp | 23.9 pp | +14.0 pp |
+
+Substituting one for the other moves the champion's forecast by **92 MW on average
+(0.54% of load), and by up to 444 MW** in the worst hour — the input difference is not
+cosmetic.
+
+**What that costs in accuracy cannot be measured from what is stored, and the numbers
+above are not the skew.** Three reasons, all of them disqualifying on their own:
+
+- **The lead time is wrong and unknown.** Those forecast-sourced hours were pulled with
+  `past_days`, so for hours already in the past Open-Meteo answers from its most recent
+  model run — not from the forecast that was issued 24 hours before the target, which is
+  what serving actually uses. The comparison mixes lead-time error with the plain
+  difference between a reanalysis (the archive) and a forecast model.
+- **The sample is eight days of one summer.** Over the 182 of those hours that have a
+  published actual, the champion scores 2.035% MAPE on the stored weather and 2.053% on
+  the observed archive. The gap is smaller than the noise and points the wrong way; those
+  hours also sit inside the champion's own early-stopping block, so they are not
+  out-of-sample either.
+- **Nothing records which path a row came from.** The dataset has one `data_source_version`
+  per row for the ingestion run, not per column for the weather source, and a later run
+  overwrites forecast weather with archive weather in place. The evidence is erased on a
+  seven-day delay.
+
+**The envelope, which is measurable.** Weather is worth 0.53 pp of MAPE to the champion
+(2.701% without it, 2.170% with it, on the same 60-day holdout below). Forecast weather
+is worse than observed weather but far better than no weather, so the skew penalty lives
+inside that 0.53 pp — it cannot quietly be a whole percentage point. That is a bound, not
+a measurement, and it is stated as one.
+
+**TODO — what would make the real measurement possible**, in the order it should be done:
+
+1. Stamp the weather source per row at ingestion (`weather_source` ∈ `archive |
+   forecast`, plus the lead time in hours) so the question stops being unanswerable in
+   hindsight. This changes the dataset schema, so it needs the sign-off CLAUDE.md asks
+   for.
+2. Keep every daily forecast pull instead of overwriting it — one small parquet per run,
+   indexed by (issued_at, target hour). Nine months of that produces a genuine
+   day-ahead-aligned weather series with no new dependency and no new API.
+3. Only then re-run the rolling-origin backtest twice, once on each weather series, and
+   report both numbers here. Back-filling it sooner means Open-Meteo's Historical
+   Forecast API, which archives past forecast runs at fixed lead times — a new external
+   source, and therefore a decision rather than a task.
 
 Weather features are aligned to the **hour being predicted**, not to the moment the
 forecast is made. That is legitimate rather than leakage: Open-Meteo publishes the

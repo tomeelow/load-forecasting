@@ -144,7 +144,8 @@ def fetch_city_forecast(
     """Forecast hourly weather for one city.
 
     This is what serving gets. It is less accurate than the archive values training
-    sees — the skew is real and is quantified rather than ignored (see README).
+    sees. How much less is not yet measurable from what this repository stores — the
+    README says exactly what is missing and what it would take.
 
     `past_days` extends the response backwards, which incremental ingestion needs: the
     archive endpoint lags real time by several days, so without it every daily run
