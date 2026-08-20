@@ -35,7 +35,12 @@ from src.ingestion.dataset import (
     read_dataset,
     write_dataset,
 )
-from src.ingestion.entsoe_client import fetch_load_frame, make_client, trailing_window
+from src.ingestion.entsoe_client import (
+    LOAD_COLUMN,
+    fetch_load_frame,
+    make_client,
+    trailing_window,
+)
 from src.ingestion.validate import ValidationReport, validate_dataset
 from src.ingestion.weather_client import fetch_national_archive, fetch_national_forecast
 from src.pipeline_state import PipelineState
@@ -62,8 +67,8 @@ def _window(
         if last_success is not None and last_success < start:
             widened = last_success.tz_convert("UTC").floor("D")
             logger.warning(
-                "Last successful ingest was {} ({:.1f} days ago), beyond the {}-day "
-                "trailing window — backfilling from {}",
+                "Data ends at {} ({:.1f} days ago), beyond the {}-day trailing "
+                "window — backfilling from {}",
                 last_success,
                 (end - last_success).total_seconds() / 86_400,
                 cfg.ingestion.trailing_repull_days,
@@ -80,6 +85,30 @@ def _window(
         else pd.Timestamp.now(tz="UTC").ceil("h")
     )
     return start, end
+
+
+def _resume_from(state: PipelineState, existing: pd.DataFrame | None) -> pd.Timestamp | None:
+    """How far back this run has to reach: the marker, or the data itself.
+
+    The marker is the better answer — it says when a run last *completed*. But the two
+    are restored together (ADR-008) and can come apart: a state file deleted by hand, a
+    partial restore, or a dataset ingested before the markers existed. The stored data
+    then still knows where the hole starts, and asking it is the difference between
+    backfilling the gap and re-pulling a fortnight over the top of it.
+    """
+    marker = state.last_success(PIPELINE)
+    if marker is not None or existing is None or LOAD_COLUMN not in existing:
+        return marker
+
+    last_actual = existing[LOAD_COLUMN].last_valid_index()
+    if last_actual is not None:
+        logger.warning(
+            "No last-success marker for '{}' but a dataset exists; resuming from its "
+            "newest actual, {}",
+            PIPELINE,
+            last_actual,
+        )
+    return last_actual
 
 
 def _weather(cfg: Config, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
@@ -115,8 +144,9 @@ def run(
     """
     state = state or PipelineState(cfg.state.pipeline_state_path)
     path = cfg.data.dataset_path
+    existing = read_dataset(path) if path.exists() else None
 
-    if not full and not path.exists():
+    if not full and existing is None:
         # An incremental pull onto nothing produces a dataset containing only the
         # trailing window — and because the next run re-pulls that same window, it
         # never grows. A scheduled runner that lost its state would sit there
@@ -128,7 +158,7 @@ def run(
         )
         full = True
 
-    start, end = _window(cfg, full, last_success=state.last_success(PIPELINE))
+    start, end = _window(cfg, full, last_success=_resume_from(state, existing))
     run_id = new_run_id()
     logger.info(
         "Ingestion {} | {} | {} -> {}", run_id, "full" if full else "incremental", start, end
@@ -144,7 +174,7 @@ def run(
     weather = _weather(cfg, start, end)
     incoming = build_dataset(load_frame, weather, run_id=run_id, tz=cfg.data.timezone_local)
 
-    dataset = merge_datasets(read_dataset(path), incoming) if path.exists() else incoming
+    dataset = merge_datasets(existing, incoming) if existing is not None else incoming
 
     report = validate_dataset(dataset, cfg.validation)
     write_dataset(dataset, path)

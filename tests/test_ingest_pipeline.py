@@ -14,7 +14,7 @@ import pytest
 
 from pipelines import ingest
 from src import synthetic
-from src.ingestion.dataset import read_dataset
+from src.ingestion.dataset import read_dataset, write_dataset
 from src.ingestion.entsoe_client import FORECAST_COLUMN, LOAD_COLUMN
 from src.pipeline_state import PipelineState
 
@@ -144,6 +144,67 @@ def test_a_successful_ingest_records_its_marker(tmp_cfg, tmp_path, monkeypatch):
     assert state.last_success(ingest.PIPELINE) is None
     ingest.run(tmp_cfg, full=True, state=state)
     assert state.last_success(ingest.PIPELINE) is not None
+
+
+def test_a_lost_marker_still_backfills_from_what_the_data_says(tmp_cfg, monkeypatch):
+    """State and data are restored together, but they can come apart.
+
+    Delete the state file and keep the parquet — a hand-edited runner, a partial
+    restore, or a dataset ingested before the markers existed — and the plain trailing
+    window would re-pull a fortnight over the top of a month-old hole and call it done.
+    """
+    stale = pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(days=40)
+    frame = synthetic.make_dataset(
+        start=(stale - pd.Timedelta(days=30)).strftime("%Y-%m-%d"),
+        end=stale.strftime("%Y-%m-%d %H:00"),
+    )
+    write_dataset(frame, tmp_cfg.data.dataset_path)
+    state = PipelineState(tmp_cfg.state.pipeline_state_path)
+    assert state.last_success(ingest.PIPELINE) is None
+
+    windows = []
+    monkeypatch.setattr(ingest, "make_client", lambda: object())
+    monkeypatch.setattr(ingest, "_weather", lambda *a, **k: frame[WEATHER_COLUMNS])
+
+    def record_window(client, country, start, end, aggregation):
+        windows.append((start, end))
+        return frame[[LOAD_COLUMN, FORECAST_COLUMN]]
+
+    monkeypatch.setattr(ingest, "fetch_load_frame", record_window)
+
+    ingest.run(tmp_cfg, full=False, state=state)
+
+    start, _ = windows[0]
+    assert start <= frame["load_mw"].last_valid_index(), (
+        "the gap since the data ends must be covered"
+    )
+    assert start > pd.Timestamp(tmp_cfg.data.start_date, tz="UTC"), "and it is not a full rebuild"
+
+
+def test_a_marker_wins_over_the_data_when_both_exist(tmp_cfg):
+    """The marker says when a run completed; the data only says what it stored."""
+    frame = synthetic.make_dataset(start="2024-01-01", end="2024-02-01")
+    write_dataset(frame, tmp_cfg.data.dataset_path)
+    state = PipelineState(tmp_cfg.state.pipeline_state_path)
+    state.record_success(ingest.PIPELINE, pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=1))
+
+    resumed = ingest._resume_from(state, frame)
+
+    assert resumed == state.last_success(ingest.PIPELINE)
+
+
+def test_a_fresh_dataset_without_a_marker_does_not_widen_the_window(tmp_cfg):
+    recent = pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(days=1)
+    frame = synthetic.make_dataset(
+        start=(recent - pd.Timedelta(days=10)).strftime("%Y-%m-%d"),
+        end=recent.strftime("%Y-%m-%d %H:00"),
+    )
+    state = PipelineState(tmp_cfg.state.pipeline_state_path)
+
+    start, _ = ingest._window(tmp_cfg, full=False, last_success=ingest._resume_from(state, frame))
+    plain_start, _ = ingest._window(tmp_cfg, full=False)
+
+    assert start == plain_start
 
 
 def test_a_full_window_starts_from_the_configured_date(tmp_cfg):
