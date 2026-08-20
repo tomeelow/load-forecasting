@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 
-from src.config import City
+from src.config import City, RequestConfig
+from src.ingestion import weather_client
 from src.ingestion.weather_client import national_weather, parse_hourly
 
 VARIABLES = ("temperature_2m", "wind_speed_10m", "cloud_cover", "relative_humidity_2m")
@@ -111,3 +115,174 @@ def test_an_unweighted_city_is_rejected():
 def test_configured_city_weights_are_normalised(cfg):
     assert sum(c.weight for c in cfg.weather.cities) == pytest.approx(1.0)
     assert {c.name for c in cfg.weather.cities} >= {"Warsaw", "Krakow", "Gdansk"}
+
+
+# --- Retrying transient failures -------------------------------------------------
+#
+# Fourteen Open-Meteo calls happen on every scheduled run against a free service with
+# no availability promise. The behaviour worth pinning down is not that a request
+# succeeds — it is which failures are worth another attempt and which are not.
+
+
+def http_response(status: int, body: dict | None = None, headers: dict | None = None):
+    response = requests.Response()
+    response.status_code = status
+    response._content = json.dumps(body or {}).encode()
+    response.headers.update(headers or {})
+    return response
+
+
+def policy(**overrides) -> RequestConfig:
+    settings = {"timeout_s": 30.0, "max_attempts": 5, "backoff_s": 1.0, "backoff_max_s": 30.0}
+    return RequestConfig(**{**settings, **overrides})
+
+
+GOOD_BODY = {
+    "utc_offset_seconds": 0,
+    "hourly": {"time": ["2024-05-01T00:00"], "temperature_2m": [11.5]},
+}
+
+
+@pytest.fixture
+def http(monkeypatch):
+    """Replace the transport and the clock: record every call and every pause."""
+    calls, sleeps = [], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(weather_client.time, "sleep", sleep)
+
+    def install(*outcomes):
+        remaining = list(outcomes)
+
+        def get(url, params=None, timeout=None):
+            calls.append({"url": url, "params": params, "timeout": timeout})
+            outcome = remaining.pop(0) if remaining else remaining
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        monkeypatch.setattr(weather_client.requests, "get", get)
+        return calls, sleeps
+
+    return install
+
+
+def test_a_timeout_is_retried_rather_than_ending_the_run(http):
+    calls, sleeps = http(requests.Timeout("read timed out"), http_response(200, GOOD_BODY))
+
+    payload = weather_client._get("https://example/api", {"latitude": 52.23}, policy())
+
+    assert payload == GOOD_BODY
+    assert len(calls) == 2
+    assert sleeps == [1.0]
+
+
+def test_a_dropped_connection_is_retried(http):
+    calls, _ = http(requests.ConnectionError("connection reset"), http_response(200, GOOD_BODY))
+
+    assert weather_client._get("https://example/api", {}, policy()) == GOOD_BODY
+    assert len(calls) == 2
+
+
+def test_a_server_error_is_retried(http):
+    calls, _ = http(http_response(503), http_response(200, GOOD_BODY))
+
+    assert weather_client._get("https://example/api", {}, policy()) == GOOD_BODY
+    assert len(calls) == 2
+
+
+def test_backoff_doubles_and_stops_at_the_ceiling(http):
+    failures = [requests.Timeout("slow")] * 4
+    _, sleeps = http(*failures, http_response(200, GOOD_BODY))
+
+    weather_client._get("https://example/api", {}, policy(max_attempts=6, backoff_max_s=3.0))
+
+    assert sleeps == [1.0, 2.0, 3.0, 3.0]  # doubling, then capped
+
+
+def test_a_rate_limit_waits_as_long_as_the_server_asked(http):
+    _, sleeps = http(
+        http_response(429, headers={"Retry-After": "7"}), http_response(200, GOOD_BODY)
+    )
+
+    weather_client._get("https://example/api", {}, policy())
+
+    assert sleeps == [7.0]  # the server's own number, not our backoff curve
+
+
+def test_a_malformed_request_is_not_retried(http):
+    """A 400 will be a 400 five times over; retrying only delays the error."""
+    calls, sleeps = http(http_response(400), http_response(200, GOOD_BODY))
+
+    with pytest.raises(requests.HTTPError):
+        weather_client._get("https://example/api", {}, policy())
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_giving_up_raises_the_last_failure_after_the_configured_attempts(http):
+    calls, sleeps = http(*[requests.Timeout("slow")] * 3)
+
+    with pytest.raises(requests.Timeout):
+        weather_client._get("https://example/api", {}, policy(max_attempts=3))
+
+    assert len(calls) == 3
+    assert sleeps == [1.0, 2.0]  # no pause after the final attempt
+
+
+def test_every_attempt_carries_the_configured_timeout(http):
+    calls, _ = http(requests.Timeout("slow"), http_response(200, GOOD_BODY))
+
+    weather_client._get("https://example/api", {}, policy(timeout_s=12.5))
+
+    assert [c["timeout"] for c in calls] == [12.5, 12.5]
+
+
+def test_one_flaky_city_does_not_lose_the_national_pull(monkeypatch, cfg):
+    """The nightly loop makes seven of these calls; one hiccup must not end the run."""
+    monkeypatch.setattr(weather_client.time, "sleep", lambda _: None)
+    attempts = {}
+
+    def get(url, params=None, timeout=None):
+        city = params["latitude"]
+        attempts[city] = attempts.get(city, 0) + 1
+        if city == cfg.weather.cities[3].lat and attempts[city] == 1:
+            raise requests.ConnectionError("connection reset by peer")
+        return http_response(
+            200,
+            {
+                "utc_offset_seconds": 0,
+                "hourly": {
+                    "time": ["2024-05-01T00:00", "2024-05-01T01:00"],
+                    **{v: [10.0, 11.0] for v in cfg.weather.variables},
+                },
+            },
+        )
+
+    monkeypatch.setattr(weather_client.requests, "get", get)
+
+    national = weather_client.fetch_national_archive(cfg.weather, "2024-05-01", "2024-05-01")
+
+    assert len(national) == 2
+    assert national["temp_c"].notna().all()
+    assert attempts[cfg.weather.cities[3].lat] == 2
+
+
+def test_the_configured_policy_actually_retries(cfg):
+    """A max_attempts of 1 in config would make all of the above decorative."""
+    assert cfg.weather.request.max_attempts > 1
+    assert cfg.weather.request.timeout_s > 0
+    assert cfg.weather.request.backoff_s > 0
+
+
+def test_a_policy_that_could_never_retry_is_rejected():
+    with pytest.raises(ValueError, match="max_attempts"):
+        policy(max_attempts=0)
+
+
+def test_a_backoff_ceiling_below_the_first_pause_is_rejected():
+    with pytest.raises(ValueError, match="backoff"):
+        policy(backoff_s=10.0, backoff_max_s=1.0)

@@ -20,6 +20,13 @@ from loguru import logger
 LOAD_COLUMN = "load_mw"
 FORECAST_COLUMN = "tso_forecast_mw"
 
+# entsoe-py retries transient failures itself; what it does not do by default is time
+# out. A request that hangs forever hangs the scheduled run with it, and the job is
+# killed by the workflow timeout with nothing written and nothing said.
+REQUEST_TIMEOUT_S = 60
+RETRY_COUNT = 3
+RETRY_DELAY_S = 10
+
 # Column names entsoe-py gives the parsed series, preferred over positional access.
 _ACTUAL_LOAD_LABEL = "Actual Load"
 _FORECAST_LOAD_LABEL = "Forecasted Load"
@@ -44,7 +51,12 @@ def make_client(api_key: str | None = None) -> LoadQueryClient:
             "email transparency@entsoe.eu with subject 'Restful API access'; access is "
             "granted in ~3 working days. Then copy .env.example to .env and paste the token."
         )
-    return EntsoePandasClient(api_key=key)
+    return EntsoePandasClient(
+        api_key=key,
+        retry_count=RETRY_COUNT,
+        retry_delay=RETRY_DELAY_S,
+        timeout=REQUEST_TIMEOUT_S,
+    )
 
 
 def to_utc_hourly(series: pd.Series, aggregation: str = "mean") -> pd.Series:
