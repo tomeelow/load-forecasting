@@ -280,3 +280,30 @@ def test_a_temporary_backend_keeps_its_artifacts_to_itself(tmp_path, tiny_model)
     assert after == before, "artifacts leaked into the repository's MLflow store"
     assert (tmp_path / "artifacts").exists()
     mlflow.set_tracking_uri(None)
+
+
+def test_the_configured_store_does_not_move_with_the_working_directory(monkeypatch, tmp_path):
+    """One authoritative store, wherever the command was typed.
+
+    A relative `sqlite:///mlruns/mlflow.db` resolves against the process's working
+    directory, so the same training command run from a subdirectory would create a
+    second, empty registry — no champion in it, and a candidate that promotes itself
+    against nothing.
+    """
+    from src.config import REPO_ROOT, load_config
+
+    expected = f"sqlite:///{REPO_ROOT / 'mlruns' / 'mlflow.db'}"
+    assert load_config().mlflow.tracking_uri == expected
+
+    monkeypatch.chdir(tmp_path)
+    assert load_config().mlflow.tracking_uri == expected
+
+
+def test_an_absolute_store_is_left_alone(tmp_path):
+    """The tests point the URI at a temporary file; resolution must not touch it."""
+    from src.config import _resolve_tracking_uri
+
+    absolute = f"sqlite:///{tmp_path}/mlflow.db"
+
+    assert _resolve_tracking_uri(absolute) == absolute
+    assert _resolve_tracking_uri("postgresql://user@host/mlflow") == "postgresql://user@host/mlflow"
