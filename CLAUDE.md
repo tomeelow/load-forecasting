@@ -32,7 +32,7 @@ Two things distinguish this project and must not be quietly dropped:
   - Bad: `updates`, `WIP`, `various changes`, `fixed stuff`
 - **Squash noisy histories before merging.** Keep `main` linear and readable.
 - **Never commit secrets, API keys, or `.env`.** Provide `.env.example` instead. The ENTSO-E security token is a secret.
-- **Never commit data or model binaries.** Datasets and artifacts go through DVC / MLflow, not into the main tree.
+- **Never commit data or model binaries.** Models go through MLflow; the dataset stays out of git and is identified by its content hash (ADR-003).
 
 ## Code quality
 
@@ -71,7 +71,7 @@ When forecasting `load[t + H]`, only information available at time `t` may be us
 - **ENTSO-E data gets revised.** "Actual" values can be updated after first publication, and some hours publish late. Re-pull a trailing window on each ingestion instead of assuming yesterday is final.
 - **Pull the TSO forecast alongside the actuals, always.** `query_load_forecast` is the benchmark; a dataset without it is incomplete.
 - **Validate before use.** Schema and range checks (`pandera`) on every ingestion: timestamp gaps, plausible load bounds for the Polish system, missing TSO-forecast hours.
-- **Version datasets with DVC.** A model without a traceable dataset hash cannot be reproduced or explained.
+- **Fingerprint every dataset a model is trained on.** `dataset_fingerprint()` hashes the contents and the run logs it as `dataset_version`; a model without a traceable dataset hash cannot be explained. DVC was considered and dropped — see ADR-003 before adding it back.
 
 ### Evaluation
 
