@@ -476,7 +476,8 @@ mechanism should be deleted rather than extended.
 
 ## ADR-009 — Drift is measured against the same weeks in previous years
 
-**Status:** accepted · **Date:** 2026-08-06
+**Status:** accepted, with a correction · **Date:** 2026-08-06 · **Amended:** 2026-08-20
+(the evidence quoted below was produced by a parsing bug; see *Correction* )
 
 ### Context
 
@@ -514,10 +515,12 @@ Removing the seasonal signal by construction is better than tuning a threshold u
 false alarms stop, because a threshold high enough to ignore an October temperature swing
 is also high enough to ignore a real regime change in October.
 
-Measured on the ingested Polish data, the difference is not theoretical. Against a
-seasonal reference, no weather feature drifts and four load-level features do — a real
-shift in demand level worth retraining for. Against a trailing reference over the same
-hours, the temperature features drift too, for no reason other than the calendar.
+Measured on the ingested Polish data, the difference is real but smaller than this ADR
+first claimed. Against a seasonal reference the fortnight ending 2026-08-06 flags 7 of 11
+inputs; against a trailing reference over the same hours, 9 of 11. The difference is
+entirely in the load-level features — three drift seasonally against five trailing — which
+is the level shift the seasonal reference is meant to absorb. The weather features drift
+under **both**. See the correction below.
 
 ### Consequences
 
@@ -531,6 +534,47 @@ hours, the temperature features drift too, for no reason other than the calendar
   triggers action.
 - A genuine multi-year trend — electrification, efficiency, a structural demand shift —
   registers as drift, correctly, because this year stops looking like previous years.
+
+### Correction, 2026-08-20
+
+The sentence this ADR originally rested on — *"against a seasonal reference, no weather
+feature drifts"* — was false, and the way it became false is worth recording.
+
+Evidently answers a drift question with one of two kinds of number, and it picks which by
+sample size rather than being told: a **p-value** on small samples (drift when the value
+is *below* the threshold) and a **distance** on large ones (drift when it is *above*).
+`_drift_from_snapshot` read every value as a p-value, so on samples large enough to get a
+Wasserstein distance — which is every real comparison this project makes — it reported the
+*complement* of the drifted columns. The four "load-level features that drifted" were the
+four that had not.
+
+What is true, measured across four dates on the ingested series and on the synthetic
+fixture, now that the comparison is the right way round:
+
+- The seasonal reference always flags **no more** features than the trailing one, and the
+  saving is in the load-level features. That part of the decision holds.
+- **The weather drifts under either reference, at every date tried.** The seasonal window
+  does not remove it.
+- The share is 0.45–1.00 depending on the date, against a `drift_share_threshold` of 0.3.
+  Input drift therefore fires more or less continuously, so in practice the loop attempts
+  a retrain most nights and the promotion gate is what protects production.
+
+The cause is not seasonality but the shape of the comparison: fourteen days of one
+realised fortnight against a three-year mixture is a narrow distribution against a wide
+one, and a normed Wasserstein distance above 0.1 is close to guaranteed. A seasonal
+reference cannot fix that, because it makes the reference *wider*, not narrower.
+
+This does not change the decision — judging September by Septembers is still right, and
+ADR-004 already makes rolling performance the decisive signal precisely because input
+drift is an early warning rather than proof. It does leave an open question, recorded here
+rather than quietly patched: the input-drift trigger needs either a like-sized reference
+sample, a threshold chosen against measured false-alarm rates, or demotion to
+report-only. Picking among those is an operational judgement with evidence still to
+gather, not a cleanup.
+
+The behaviour of the trigger is unchanged by the fix: `should_retrain` reads Evidently's
+own drifted-share, which was always right. What changed is that the feature names in the
+report are now the ones that actually moved.
 
 ### What would change our mind
 

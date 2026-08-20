@@ -10,11 +10,20 @@ from __future__ import annotations
 
 import dataclasses
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from src import synthetic
-from src.monitoring.drift import INSUFFICIENT, OK, check_drift, latest_report, monitored_columns
+from src.monitoring.drift import (
+    INSUFFICIENT,
+    OK,
+    _drift_from_snapshot,
+    _evidently_report,
+    check_drift,
+    latest_report,
+    monitored_columns,
+)
 from src.monitoring.reference import SEASONAL, TRAILING, choose_reference, seasonal_reference
 from src.prediction_log import PredictionLog, PredictionRecord
 
@@ -122,20 +131,48 @@ def test_year_one_falls_back_to_trailing_and_says_so(four_years):
     assert window.rows > 0
 
 
-def test_seasonal_comparison_does_not_fire_on_the_turn_of_the_seasons(
-    monitoring_cfg, log, four_years
-):
-    """Late September against previous Septembers: the weather changed on schedule."""
+@pytest.mark.parametrize(
+    ("rows", "expected_method"),
+    [(200, "p_value"), (3000, "distance")],
+)
+def test_the_drifted_column_named_is_the_one_that_actually_moved(rows, expected_method):
+    """Evidently answers with a p-value on small samples and a distance on large ones.
+
+    They point in opposite directions — drift is *below* a p-value threshold and *above*
+    a distance threshold — and Evidently chooses between them by sample size rather than
+    being told. Reading both the same way names the complement of the drifted columns,
+    silently, and only on the larger samples where the answer matters.
+    """
+    rng = np.random.default_rng(0)
+    current = pd.DataFrame({"unmoved": rng.normal(0, 1, rows), "moved": rng.normal(5, 1, rows)})
+    reference = pd.DataFrame({"unmoved": rng.normal(0, 1, rows), "moved": rng.normal(0, 1, rows)})
+
+    payload = _evidently_report(current, reference, None)
+    drifted, share = _drift_from_snapshot(payload)
+
+    method = next(
+        m["config"]["method"]
+        for m in payload["metrics"]
+        if m["metric_name"].startswith("ValueDrift")
+    )
+    assert (expected_method == "p_value") == ("p_value" in method), f"Evidently used {method}"
+    assert drifted == ["moved"]
+    assert share == pytest.approx(0.5)
+
+
+def test_the_named_columns_agree_with_evidentlys_own_count(four_years, monitoring_cfg, log):
+    """The count comes from the library, the names from our parsing of the same payload."""
     result = check_drift(monitoring_cfg, four_years, log, now=NOW, write_report=False)
 
-    assert result.reference_strategy == SEASONAL
-    weather_drift = {f for f in result.drifted_features if f.startswith(("temp", "wind", "cloud"))}
-    assert not weather_drift, f"seasonality leaked into the drift signal: {weather_drift}"
+    assert result.drift_share == pytest.approx(len(result.drifted_features) / 11, abs=0.001)
 
 
-def test_a_trailing_reference_would_have_fired_on_the_same_data(monitoring_cfg, log, four_years):
-    """The comparison that justifies the seasonal choice, run explicitly."""
-    trailing_cfg = dataclasses.replace(
+def lag_features(result) -> set[str]:
+    return {f for f in result.drifted_features if f.startswith("load")}
+
+
+def trailing_config(monitoring_cfg):
+    return dataclasses.replace(
         monitoring_cfg,
         monitoring=dataclasses.replace(
             monitoring_cfg.monitoring,
@@ -143,12 +180,53 @@ def test_a_trailing_reference_would_have_fired_on_the_same_data(monitoring_cfg, 
         ),
     )
 
-    seasonal = check_drift(monitoring_cfg, four_years, log, now=NOW, write_report=False)
-    trailing = check_drift(trailing_cfg, four_years, log, now=NOW, write_report=False)
 
+def test_a_seasonal_reference_reports_less_drift_than_a_trailing_one(
+    monitoring_cfg, log, four_years
+):
+    """The comparison that justifies the seasonal choice, run explicitly.
+
+    Late September against previous Septembers versus against late August: the load
+    level in the trailing window has moved with the season, and every lag feature says
+    so. Judging September by Septembers removes that, which is the whole decision in
+    ADR-009.
+    """
+    seasonal = check_drift(monitoring_cfg, four_years, log, now=NOW, write_report=False)
+    trailing = check_drift(
+        trailing_config(monitoring_cfg), four_years, log, now=NOW, write_report=False
+    )
+
+    assert seasonal.reference_strategy == SEASONAL
     assert trailing.reference_strategy == TRAILING
-    # Autumn against late summer moves the temperature; the same weeks a year ago do not.
-    assert len(trailing.drifted_features) >= len(seasonal.drifted_features)
+    assert len(seasonal.drifted_features) < len(trailing.drifted_features)
+
+    assert lag_features(seasonal) < lag_features(trailing), (
+        "the seasonal reference should absorb the level shift"
+    )
+
+
+def test_a_fortnight_against_years_of_history_still_flags_the_weather(
+    monitoring_cfg, log, four_years
+):
+    """A limitation this pins deliberately, not a property to be proud of.
+
+    ADR-009 originally claimed no weather feature drifts against a seasonal reference.
+    It does — on synthetic data and on the ingested series, at every date tried. The
+    claim came from reading Evidently's distance metric as though it were a p-value,
+    which named the complement of the drifted columns; see `_is_drifted`.
+
+    The cause is the shape of the comparison, not the seasonality: fourteen days of one
+    realised fortnight against a three-year mixture is a narrow distribution against a
+    wide one, and a normed Wasserstein distance over 0.1 is nearly guaranteed. Input
+    drift is therefore not specific enough to be the trigger on its own, which is why
+    ADR-004 makes rolling performance the decisive signal. Fixing it means a like-sized
+    reference or a different threshold — a monitoring design change, and an open
+    question rather than a silent edit.
+    """
+    result = check_drift(monitoring_cfg, four_years, log, now=NOW, write_report=False)
+
+    weather = {f for f in result.drifted_features if f.startswith(("temp", "wind", "cloud"))}
+    assert weather, "if this now passes, the sensitivity was fixed — update ADR-009 with it"
 
 
 def test_with_no_served_predictions_performance_is_not_assessed(monitoring_cfg, log, four_years):

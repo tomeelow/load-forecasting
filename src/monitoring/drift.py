@@ -114,20 +114,46 @@ class DriftResult:
         return "\n".join(lines)
 
 
+def _is_drifted(value: float, method: str, threshold: float) -> bool:
+    """Which side of the threshold means drift depends on what Evidently measured.
+
+    A **p-value** test (K-S, chi-square) reports drift when the value falls *below* the
+    threshold. A **distance** (Wasserstein, Jensen-Shannon, PSI) reports drift when it
+    rises *above* it. Evidently picks between them by sample size rather than being told,
+    so reading every value the same way names the complement of the drifted columns —
+    and it does so precisely on the larger samples, where the answer matters most.
+    """
+    return value < threshold if "p_value" in method else value >= threshold
+
+
 def _drift_from_snapshot(payload: dict) -> tuple[list[str], float | None]:
     """Pull the drifted column names and the drifted share out of an Evidently result."""
     drifted: list[str] = []
     share: float | None = None
+    counted: int | None = None
     for metric in payload.get("metrics", []):
         name = metric.get("metric_name", "")
         value = metric.get("value")
+        config = metric.get("config", {})
         if name.startswith("DriftedColumnsCount") and isinstance(value, dict):
             share = float(value.get("share", 0.0))
+            counted = int(value.get("count", 0))
         match = _COLUMN_IN_METRIC.match(name)
         if match and isinstance(value, (int, float)):
-            column_threshold = float(metric.get("config", {}).get("threshold", 0.05))
-            if float(value) < column_threshold:
+            method = str(config.get("method", name))
+            if _is_drifted(float(value), method, float(config.get("threshold", 0.05))):
                 drifted.append(match.group("column"))
+
+    # Evidently counts the same thing independently. When the two disagree it is this
+    # parsing that is wrong, not the library, and a silent disagreement is how the
+    # inverted comparison above survived a release in the first place.
+    if counted is not None and counted != len(drifted):
+        logger.warning(
+            "Drift parsing disagrees with Evidently: it counted {} drifted column(s), "
+            "these {} were identified — the reported names may be wrong",
+            counted,
+            len(drifted),
+        )
     return sorted(drifted), share
 
 
