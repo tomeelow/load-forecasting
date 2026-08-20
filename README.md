@@ -28,53 +28,97 @@ ASCII version this will be redrawn from).
 
 ## Benchmark results
 
-> ⚠️ **This table is stale: the numbers below came from synthetic data.** Real ENTSO-E
-> data has since been ingested (2019-01-01 to date, 66,768 hourly rows) and the champion
-> is trained on it, but the rolling-origin backtest has not yet been re-run — that is a
-> ~20 minute job scheduled for the next pass. Until it is, read this table as evidence
-> that the evaluation machinery works, not as a result about Polish demand. The
-> synthetic "PSE forecast" in particular was constructed as *the actual load plus small
-> autocorrelated noise*, making it a near-oracle nothing could beat; the real PSE
-> forecast has no such advantage. Regenerate with:
->
-> ```bash
-> uv run python -m pipelines.backtest
-> ```
+Two numbers, measuring different things, and the difference matters. The **rolling-origin
+backtest** is the reported result: a full year of out-of-sample hours, refitted at 26
+origins. The **champion holdout** is what the promotion gate looked at when the model
+currently serving was promoted: one recent 60-day block. Neither is a substitute for the
+other, so both are here.
 
-Rolling-origin backtest, 24-hour horizon: 26 expanding-window origins, **8,736
-out-of-sample hours covering a full year** (2023-01-09 → 2024-01-08), with a 24-hour
-embargo between each training window and the block it predicts. Full report, including
-the per-segment breakdown, in [`reports/benchmark_h24.md`](reports/benchmark_h24.md).
+### Rolling-origin backtest — the reported figure
 
-| Model | MAPE | RMSE (MW) | MAE (MW) | vs PSE forecast |
-|---|---|---|---|---|
-| Naive seasonal (`load[T−168]`) | 3.405% | 837 | 636 | +2.286 pp worse |
-| Linear (calendar + weather) | 4.412% | 1012 | 828 | +3.293 pp worse |
-| **PSE day-ahead forecast (ENTSO-E)** | 1.119% | 260 | 208 | *(the benchmark)* |
-| LightGBM (calendar + lags) | 2.402% | 581 | 451 | +1.283 pp worse |
-| LightGBM (+ weather) | 1.868% | 446 | 348 | +0.748 pp worse |
-| LightGBM (+ weather, tuned) | 1.837% | 436 | 343 | +0.718 pp worse |
+24-hour horizon, real ENTSO-E data (dataset `65a36efba487`): 26 expanding-window origins,
+**8,709 out-of-sample hours covering a full year** (2021-01-08 → 2022-01-07), with a
+24-hour embargo between each training window and the block it predicts. Baselines and
+PSE are scored on exactly the same hours. Full report, including every segment, in
+[`reports/benchmark_h24.md`](reports/benchmark_h24.md).
 
-P10/P50/P90 pinball losses: 82.2 / 171.7 / 87.5 MW.
+| Model | MAPE | RMSE (MW) | MAE (MW) | Bias (MW) | vs PSE forecast |
+|---|---|---|---|---|---|
+| Naive seasonal (`load[T−168]`) | 4.300% | 1339 | 839 | +6 | +1.641 pp worse |
+| Linear (calendar + weather) | 6.195% | 1504 | 1209 | −486 | +3.537 pp worse |
+| **PSE day-ahead forecast (ENTSO-E)** | 2.658% | 674 | 526 | +391 | *(the benchmark)* |
+| LightGBM (calendar + lags) | 2.158% | 648 | 428 | −76 | **−0.501 pp better** |
+| LightGBM (+ weather) | 1.983% | 593 | 392 | −100 | **−0.675 pp better** |
+| LightGBM (+ weather, tuned) | 1.947% | 584 | 385 | −114 | **−0.711 pp better** |
 
-### Where the model loses
+P10/P50/P90 pinball losses: 110.4 / 192.4 / 118.9 MW.
 
-It loses everywhere, by 0.66–0.87 pp, for the reason given in the warning above. The
-*shape* of the losses is still informative and matches what the literature predicts:
+The model beats PSE's own day-ahead forecast by 0.71 pp of MAPE over the year — 27%
+lower error, 90 MW less RMSE. Weather is worth 0.175 pp of that (2.158% → 1.983%) and
+the Optuna search a further 0.036 pp, which is worth knowing before anyone spends a day
+on hyperparameters. PSE's forecast runs +391 MW high on average; ours runs 114 MW low.
+
+### Where it loses
+
+It loses in exactly the places with the fewest examples, and it loses badly:
 
 | Segment | Hours | Model MAPE | PSE MAPE | Gap |
 |---|---|---|---|---|
-| Holidays | 312 | 2.166% | 1.300% | +0.866 pp |
-| Christmas–New Year | 216 | 1.908% | 1.112% | +0.796 pp |
-| Weekends | 2496 | 2.041% | 1.249% | +0.792 pp |
-| Off-peak hours | 3276 | 2.005% | 1.219% | +0.787 pp |
-| Weekdays | 6240 | 1.756% | 1.067% | +0.688 pp |
-| Peak hours | 5460 | 1.736% | 1.059% | +0.677 pp |
+| Christmas–New Year | 215 | 7.273% | 2.954% | **+4.319 pp** |
+| Holidays | 311 | 5.099% | 2.967% | **+2.132 pp** |
+| Winter | 2109 | 2.715% | 2.561% | +0.153 pp |
+| Weekends | 2470 | 2.053% | 2.658% | −0.605 pp |
+| Peak hours | 5445 | 2.025% | 2.719% | −0.693 pp |
+| Off-peak hours | 3264 | 1.816% | 2.558% | −0.742 pp |
+| Weekdays | 6239 | 1.905% | 2.658% | −0.754 pp |
+| Summer | 2208 | 1.577% | 2.853% | −1.277 pp |
 
-The worst segments are holidays and the Christmas–New Year week — the two the plan
-predicted, and the two with the fewest examples to learn from. Weather is worth
-0.53 pp of MAPE (2.402% → 1.868%); tuning adds a further 0.03 pp, which is small enough
-to be worth knowing before anyone spends a day on hyperparameters.
+A 7.3% MAPE across the Christmas–New Year week against PSE's 2.95% is the single worst
+result in this repository, and it is not a rounding error: those 215 hours are a demand
+regime the model has seen twice in its training data and a human dispatcher has seen
+every year of their career. A holiday flag is not enough — the week behaves like neither
+a weekday nor a weekend nor a normal holiday, and PSE's forecasters know that. This is
+the first thing to fix, and it is the reason the segment table is reported worst-first
+rather than best-first.
+
+**What this year is and is not.** The backtest starts where the data allows: with
+`initial_train_days: 730`, the first origin sits two years after 2019-01-01, so the
+covered year is 2021 — the earliest available, not the most recent. 2021 also carries
+pandemic-recovery demand. Sweeping every origin the data supports (`max_splits: null`,
+~146 origins, 2021 → 2026) is the same methodology at roughly ten hours of compute
+instead of forty minutes; the section below is what covers the recent period until that
+is run.
+
+### Champion holdout — what is serving now
+
+The registered champion (`pl_load_lgbm@champion`, v4) was trained and gated on a single
+chronological 60-day block, **2026-06-07 → 2026-08-06, 1,440 hours** of real data:
+
+| Model | MAPE | vs PSE |
+|---|---|---|
+| Naive seasonal | 5.732% | +2.640 pp worse |
+| **PSE day-ahead forecast** | 3.092% | *(the benchmark)* |
+| LightGBM (calendar + lags) | 2.701% | −0.391 pp better |
+| LightGBM (+ weather) | 2.170% | −0.922 pp better |
+| **LightGBM (+ weather, tuned) — champion** | 2.115% | −0.977 pp better |
+
+Read this as gate evidence, not as a published result, for two reasons. It is **one draw
+from one summer**: PSE's own MAPE in that window is 3.09% against an annual range of
+2.2–3.2% across 2019–2026 (July 2026 alone was 3.57%), so some of the margin is the
+window rather than the model. And the block doubles as the **early-stopping set**, so the
+iteration count was chosen on the hours being scored — the backtest above avoids that
+with a second embargoed split inside each origin, which is precisely why it, and not
+this, is the reported figure.
+
+Regenerate either with:
+
+```bash
+uv run python -m pipelines.backtest
+```
+
+```bash
+uv run python -m pipelines.train
+```
 
 ## Data inventory
 
@@ -137,11 +181,11 @@ above are not the skew.** Three reasons, all of them disqualifying on their own:
   overwrites forecast weather with archive weather in place. The evidence is erased on a
   seven-day delay.
 
-**The envelope, which is measurable.** Weather is worth 0.53 pp of MAPE to the champion
-(2.701% without it, 2.170% with it, on the same 60-day holdout below). Forecast weather
-is worse than observed weather but far better than no weather, so the skew penalty lives
-inside that 0.53 pp — it cannot quietly be a whole percentage point. That is a bound, not
-a measurement, and it is stated as one.
+**The envelope, which is measurable.** Weather is worth 0.175 pp of MAPE over the
+backtest year (2.158% without it, 1.983% with it) and 0.53 pp on the 60-day holdout.
+Forecast weather is worse than observed weather but far better than no weather, so the
+skew penalty lives inside that gap — it cannot quietly be half a percentage point over a
+year. That is a bound, not a measurement, and it is stated as one.
 
 **TODO — what would make the real measurement possible**, in the order it should be done:
 
@@ -207,8 +251,9 @@ promotion gate:
 uv run python -m pipelines.train
 ```
 
-Produce the benchmark table from a rolling-origin backtest (takes ~20 minutes: each
-origin is a full refit of every variant — use `--max-splits 3` for a quick check):
+Produce the benchmark table from a rolling-origin backtest (~45 minutes for the
+configured 26 origins: a five-minute Optuna search, then a full refit of every variant
+and of the quantile band at each origin — use `--max-splits 3` for a quick check):
 
 ```bash
 uv run python -m pipelines.backtest
