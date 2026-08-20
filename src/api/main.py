@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pandas as pd
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -31,7 +30,7 @@ from src.api.schemas import (
     HourlyForecast,
     ReloadResponse,
 )
-from src.config import Config, load_config
+from src.config import Config, load_config, load_project_env
 from src.features.inference import features_for_targets, servable_until
 from src.ingestion.dataset import read_dataset
 from src.ingestion.entsoe_client import LOAD_COLUMN
@@ -77,7 +76,7 @@ class Service:
 
 def create_app(cfg: Config | None = None, *, load_model_on_startup: bool = True) -> FastAPI:
     """Build the app. `cfg` is injectable so tests never touch the real registry."""
-    load_dotenv()
+    load_project_env()
     cfg = cfg or load_config()
     service = Service(cfg=cfg, log=PredictionLog(cfg.state.prediction_log_path))
 

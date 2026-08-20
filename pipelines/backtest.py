@@ -16,10 +16,9 @@ import sys
 from pathlib import Path
 
 import mlflow
-from dotenv import load_dotenv
 from loguru import logger
 
-from src.config import Config, load_config
+from src.config import Config, load_config, load_project_env
 from src.evaluation.backtest import BacktestResult, benchmark_markdown, run_backtest
 from src.ingestion.dataset import TrainingData, load_training_frame
 from src.models.tracking import configure
@@ -111,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    load_dotenv()
+    load_project_env()
     cfg = load_config(args.config)
     configure(cfg.mlflow)
 

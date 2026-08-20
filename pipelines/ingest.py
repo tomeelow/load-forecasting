@@ -24,10 +24,9 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
 from loguru import logger
 
-from src.config import Config, load_config
+from src.config import Config, load_config, load_project_env
 from src.evaluation.splits import minimum_training_hours
 from src.ingestion.dataset import (
     build_dataset,
@@ -186,7 +185,14 @@ def run(
     Idempotent by construction: the window is merged onto whatever is stored, and
     `merge_datasets` replaces overlapping hours rather than appending them. Running
     twice for the same day produces the same file as running once.
+
+    Loads `.env` itself rather than trusting `main()` to have done it. This is the only
+    function in the project that needs the ENTSO-E token, and a caller that reaches it
+    without going through the command line — a scheduler, a notebook, another module —
+    would otherwise get "ENTSOE_API_KEY is not set" while a perfectly good `.env` sat
+    unread beside it.
     """
+    load_project_env()
     state = state or PipelineState(cfg.state.pipeline_state_path)
     path = cfg.data.dataset_path
     existing = read_dataset(path) if path.exists() else None
@@ -239,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=None, help="path to config.yaml")
     args = parser.parse_args(argv)
 
-    load_dotenv()
+    load_project_env()
     _, report = run(load_config(args.config), full=args.full)
     return 0 if report.ok else 1
 
