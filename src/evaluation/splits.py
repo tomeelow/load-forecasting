@@ -18,6 +18,28 @@ import pandas as pd
 from loguru import logger
 
 
+class InsufficientHistoryError(ValueError):
+    """There is not enough history to form both blocks of a chronological split.
+
+    A `ValueError` subclass so existing callers and tests are unaffected, and its own
+    type so the scheduled loop can tell "this deployment is too young to train yet"
+    apart from "training broke". The first is a fact about a new deployment; the second
+    is a failure.
+    """
+
+
+def minimum_training_hours(*, validation_days: int, horizon: int, weekly_lag: int) -> int:
+    """Hours of raw history a chronological split needs before it yields both blocks.
+
+    Three costs, in the order the data pays them: the feature builder drops the first
+    `weekly_lag + horizon` rows for want of lags, the validation block claims
+    `validation_days` of what is left, and the embargo takes `horizon` more between the
+    two. Exactly this much leaves a single training row, so it is a floor to test
+    against — "can this be split at all" — and never an amount to aim for.
+    """
+    return weekly_lag + horizon + validation_days * 24 + horizon
+
+
 @dataclass(frozen=True)
 class Split:
     """One train/test pair, with an embargo of `horizon` hours between them."""
@@ -63,7 +85,7 @@ def chronological_split(
     train = index[index <= train_end]
     validation = index[index >= validation_start]
     if len(train) == 0 or len(validation) == 0:
-        raise ValueError(
+        raise InsufficientHistoryError(
             f"validation_days={validation_days} leaves {len(train)} training and "
             f"{len(validation)} validation rows over {len(index)} available"
         )

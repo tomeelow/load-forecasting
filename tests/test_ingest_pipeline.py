@@ -147,6 +147,64 @@ def test_a_successful_ingest_records_its_marker(tmp_cfg, tmp_path, monkeypatch):
     assert state.last_success(ingest.PIPELINE) is not None
 
 
+def stored_dataset(tmp_cfg, *, start: str, hours: int) -> pd.DataFrame:
+    index = pd.date_range(start, periods=hours, freq="1h", tz="UTC")
+    frame = synthetic.make_dataset(
+        start=index[0].strftime("%Y-%m-%d %H:00"), end=index[-1].strftime("%Y-%m-%d %H:00")
+    )
+    write_dataset(frame, tmp_cfg.data.dataset_path)
+    return frame
+
+
+def test_a_dataset_too_short_to_train_on_is_rebuilt_not_topped_up(tmp_cfg):
+    """The failure that ran the scheduled loop into the ground for three weeks.
+
+    A first run without the full-rebuild guard stored only the trailing fortnight. Every
+    run after it merged a fresh window into that file, so the dataset existed, looked
+    healthy and grew by a day a night — while every retrain died on a 60-day validation
+    split it would not reach until October.
+    """
+    existing = stored_dataset(tmp_cfg, start="2026-07-26", hours=744)
+
+    reason = ingest._rebuild_reason(tmp_cfg, existing)
+
+    assert reason is not None
+    assert "744 hours" in reason
+    assert "2026-07-26" in reason
+
+
+def test_a_dataset_long_enough_to_train_on_is_left_alone(tmp_cfg):
+    existing = stored_dataset(tmp_cfg, start="2026-01-01", hours=24 * 200)
+
+    assert ingest._rebuild_reason(tmp_cfg, existing) is None
+
+
+def test_a_short_dataset_that_already_starts_at_the_beginning_is_not_rebuilt_nightly(tmp_cfg):
+    """A zone whose published history is genuinely brief must not re-pull it every night."""
+    existing = stored_dataset(tmp_cfg, start=tmp_cfg.data.start_date, hours=500)
+
+    assert ingest._rebuild_reason(tmp_cfg, existing) is None
+
+
+def test_the_rebuild_actually_pulls_from_the_configured_start(tmp_cfg, monkeypatch):
+    frame = synthetic.make_dataset(start="2024-01-01", end="2024-02-01")
+    stored_dataset(tmp_cfg, start="2026-07-26", hours=744)
+    windows = []
+    monkeypatch.setattr(ingest, "make_client", lambda: object())
+    monkeypatch.setattr(ingest, "_weather", lambda *a, **k: frame[WEATHER_COLUMNS])
+
+    def record_window(client, country, start, end, aggregation):
+        windows.append((start, end))
+        return frame[[LOAD_COLUMN, FORECAST_COLUMN]]
+
+    monkeypatch.setattr(ingest, "fetch_load_frame", record_window)
+
+    ingest.run(tmp_cfg, full=False, state=PipelineState(tmp_cfg.state.pipeline_state_path))
+
+    start, _ = windows[0]
+    assert start == pd.Timestamp(tmp_cfg.data.start_date, tz=tmp_cfg.data.timezone_local)
+
+
 def test_a_run_that_fails_leaves_the_marker_where_it_was(tmp_cfg, monkeypatch):
     """The marker means "this window is stored", so a crash must not advance it.
 
@@ -178,8 +236,10 @@ def test_a_lost_marker_still_backfills_from_what_the_data_says(tmp_cfg, monkeypa
     window would re-pull a fortnight over the top of a month-old hole and call it done.
     """
     stale = pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(days=40)
+    # Long enough to train on, so this exercises the marker fallback rather than the
+    # rebuild rule that a too-short dataset would trigger first.
     frame = synthetic.make_dataset(
-        start=(stale - pd.Timedelta(days=30)).strftime("%Y-%m-%d"),
+        start=(stale - pd.Timedelta(days=200)).strftime("%Y-%m-%d"),
         end=stale.strftime("%Y-%m-%d %H:00"),
     )
     write_dataset(frame, tmp_cfg.data.dataset_path)

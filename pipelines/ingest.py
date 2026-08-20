@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from src.config import Config, load_config
+from src.evaluation.splits import minimum_training_hours
 from src.ingestion.dataset import (
     build_dataset,
     merge_datasets,
@@ -85,6 +86,51 @@ def _window(
         else pd.Timestamp.now(tz="UTC").ceil("h")
     )
     return start, end
+
+
+def _rebuild_reason(cfg: Config, existing: pd.DataFrame | None) -> str | None:
+    """Why this run must rebuild the configured history instead of topping it up.
+
+    Two situations, neither of which an incremental pull can climb out of on its own:
+
+    * **No dataset at all.** An incremental pull onto nothing stores only the trailing
+      window, and because the next run re-pulls that same window it never grows. A
+      scheduled runner that lost its state would sit there forever with a fortnight of
+      data and a model that cannot be trained.
+    * **A dataset too short to train on that also starts later than configured.** This
+      is the first case one day later, and it is worse because it looks healthy: the
+      file exists, every run merges a fresh window into it, and it grows by a day a
+      night. It took the scheduled loop three weeks to accumulate 31 days, with every
+      retrain failing on a 60-day validation split in the meantime.
+
+    The second condition needs both halves. Short alone would rebuild nightly on a zone
+    whose publication history is genuinely brief; later-than-configured alone would
+    re-pull years because someone moved `start_date` back, which is what `--full` is
+    for.
+    """
+    if existing is None:
+        return f"no dataset at {cfg.data.dataset_path}"
+
+    needed = minimum_training_hours(
+        validation_days=cfg.model.validation_days,
+        horizon=cfg.model.horizons[0],
+        weekly_lag=cfg.features.weekly_lag_hours,
+    )
+    if len(existing) >= needed:
+        return None
+
+    configured_start = pd.Timestamp(cfg.data.start_date, tz=cfg.data.timezone_local).tz_convert(
+        "UTC"
+    )
+    if existing.index.min() <= configured_start + pd.Timedelta(days=1):
+        return None  # already back at the beginning; this is all the source has
+
+    return (
+        f"the stored dataset holds {len(existing)} hours, short of the {needed} a "
+        f"{cfg.model.validation_days}-day validation split needs, and starts "
+        f"{existing.index.min():%Y-%m-%d} rather than the configured "
+        f"{configured_start:%Y-%m-%d}"
+    )
 
 
 def _resume_from(state: PipelineState, existing: pd.DataFrame | None) -> pd.Timestamp | None:
@@ -146,17 +192,14 @@ def run(
     path = cfg.data.dataset_path
     existing = read_dataset(path) if path.exists() else None
 
-    if not full and existing is None:
-        # An incremental pull onto nothing produces a dataset containing only the
-        # trailing window — and because the next run re-pulls that same window, it
-        # never grows. A scheduled runner that lost its state would sit there
-        # forever with a fortnight of data and a model that cannot be trained.
-        logger.warning(
-            "No dataset at {} — rebuilding the full configured history instead of "
-            "pulling the trailing window.",
-            path,
-        )
-        full = True
+    if not full:
+        reason = _rebuild_reason(cfg, existing)
+        if reason is not None:
+            logger.warning(
+                "Rebuilding the full configured history instead of pulling the trailing window: {}",
+                reason,
+            )
+            full = True
 
     start, end = _window(cfg, full, last_success=_resume_from(state, existing))
     run_id = new_run_id()

@@ -10,7 +10,12 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from src.evaluation.splits import chronological_split, rolling_origin_splits
+from src.evaluation.splits import (
+    InsufficientHistoryError,
+    chronological_split,
+    minimum_training_hours,
+    rolling_origin_splits,
+)
 
 HORIZONS = [1, 6, 24, 48]
 
@@ -132,3 +137,33 @@ def test_an_empty_index_is_rejected():
         chronological_split(empty, validation_days=30, horizon=24)
     with pytest.raises(ValueError, match="empty"):
         rolling_origin_splits(empty, horizon=24, initial_train_days=1, test_days=1, step_days=1)
+
+
+def test_the_training_floor_accounts_for_warmup_validation_and_embargo():
+    """Every hour the split spends before it can hand back two blocks."""
+    needed = minimum_training_hours(validation_days=60, horizon=24, weekly_lag=168)
+
+    # 168 + 24 of warm-up the feature builder drops, 60 days of validation, and 24 of
+    # embargo between them.
+    assert needed == 168 + 24 + 60 * 24 + 24
+
+
+@pytest.mark.parametrize(("offset", "splits_cleanly"), [(0, True), (-1, False)])
+def test_the_floor_is_exactly_where_a_split_stops_being_possible(offset, splits_cleanly):
+    """One hour either side of it: the last that works and the first that does not."""
+    needed = minimum_training_hours(validation_days=2, horizon=24, weekly_lag=168)
+    raw = pd.date_range("2024-01-01", periods=needed + offset, freq="1h", tz="UTC")
+    features = raw[168 + 24 :]  # what make_features leaves behind
+
+    if splits_cleanly:
+        train, validation = chronological_split(features, validation_days=2, horizon=24)
+        assert len(train) >= 1
+        assert validation.min() - train.max() == pd.Timedelta(hours=24)
+    else:
+        with pytest.raises(InsufficientHistoryError):
+            chronological_split(features, validation_days=2, horizon=24)
+
+
+def test_the_shortage_is_a_valueerror_so_existing_callers_are_unaffected():
+    """Its own type for the scheduled loop; still a ValueError for everyone else."""
+    assert issubclass(InsufficientHistoryError, ValueError)

@@ -13,6 +13,7 @@ import pytest
 
 from pipelines import check_drift, evaluate, retrain_if_needed
 from src import synthetic
+from src.evaluation.splits import InsufficientHistoryError
 from src.ingestion.dataset import write_dataset
 from src.pipeline_state import PipelineState
 from src.prediction_log import PredictionLog, PredictionRecord
@@ -238,6 +239,51 @@ def test_the_cadence_triggers_a_retrain_without_any_drift(loop_cfg, tmp_path, mo
 
     assert outcome.status == retrain_if_needed.PROMOTED
     assert "cadence elapsed" in outcome.reason
+
+
+def test_a_deployment_too_young_to_train_reports_it_instead_of_failing(
+    loop_cfg, tmp_path, monkeypatch
+):
+    """Three weeks of scheduled runs died here, one traceback a night.
+
+    A fresh deployment has weeks of data and a 60-day validation split; that is a fact
+    about the data, not a broken pipeline. Failing the job over it turns the loop red
+    every morning until someone stops reading it — and the steps that carry state out
+    of the runner sit behind that failure.
+    """
+    state = PipelineState(tmp_path / "state.json")
+    state.raise_retrain_flag("input drift")
+
+    def too_young(cfg, horizon, *, tune):
+        raise InsufficientHistoryError(
+            "validation_days=60 leaves 0 training and 414 validation rows over 414 available"
+        )
+
+    monkeypatch.setattr(retrain_if_needed, "train_horizon", too_young)
+    monkeypatch.setattr(retrain_if_needed, "configure", lambda _: None)
+
+    outcome = retrain_if_needed.run(loop_cfg, state=state, now=NOW)
+
+    assert outcome.status == retrain_if_needed.INSUFFICIENT_DATA
+    assert "414 validation rows" in outcome.reason
+    # The question was never answered, so the flag stays raised and the cadence clock
+    # stays where it was: tomorrow asks again with a day more history.
+    assert state.retrain_flag() is not None
+    assert state.last_success(retrain_if_needed.PIPELINE) is None
+
+
+def test_the_loop_step_still_exits_zero_when_there_is_too_little_history(
+    loop_cfg, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(retrain_if_needed, "load_config", lambda _: loop_cfg)
+    monkeypatch.setattr(retrain_if_needed, "configure", lambda _: None)
+    monkeypatch.setattr(
+        retrain_if_needed,
+        "train_horizon",
+        lambda cfg, horizon, *, tune: (_ for _ in ()).throw(InsufficientHistoryError("too young")),
+    )
+
+    assert retrain_if_needed.main([]) == 0
 
 
 @dataclasses.dataclass
