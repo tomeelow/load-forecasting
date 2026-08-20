@@ -160,3 +160,40 @@ def test_hourly_aggregation_of_a_synthetic_day_is_the_quarter_hourly_mean():
 
     first_hour = series.loc["2024-05-01 00:00":"2024-05-01 00:45"]
     assert hourly.iloc[0] == pytest.approx(np.mean(first_hour.to_numpy()))
+
+
+# --- The transport, which entsoe-py leaves half-covered ---------------------------
+
+
+def test_the_client_retries_read_timeouts_entsoe_py_does_not():
+    """entsoe-py's own decorator catches ConnectionError and misses ReadTimeout.
+
+    A read timeout is what the Transparency Platform produces when it is busy and the
+    caller wants a year of 15-minute data — which is every request of a rebuild. One of
+    them ended a CI rebuild outright.
+    """
+    client = make_client(api_key="not-a-real-token")
+    retries = client.session.get_adapter("https://web-api.tp.entsoe.eu").max_retries
+
+    assert retries.read >= 1, "a read timeout must be retried"
+    assert retries.connect >= 1
+    assert retries.backoff_factor > 0, "retries without backoff hammer a busy server"
+
+
+def test_the_client_cannot_hang_for_ever():
+    """No timeout at all was the original defect: the job dies on the workflow clock."""
+    client = make_client(api_key="not-a-real-token")
+
+    assert client.timeout is not None
+    assert 0 < client.timeout <= 300
+
+
+def test_the_retries_apply_per_request_not_per_multi_year_call():
+    """Mounted on the session, so one slow year is retried alone.
+
+    entsoe-py splits long ranges into one request per year internally. Retrying at our
+    level would re-fetch every year to recover one of them.
+    """
+    client = make_client(api_key="not-a-real-token")
+
+    assert client.session.get_adapter("https://web-api.tp.entsoe.eu").max_retries.total >= 1
