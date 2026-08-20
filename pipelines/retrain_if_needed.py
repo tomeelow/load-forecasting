@@ -26,12 +26,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
 from loguru import logger
 from mlflow.tracking import MlflowClient
 
 from pipelines.train import train_horizon
-from src.config import Config, load_config
+from src.config import Config, load_config, load_project_env
 from src.evaluation.splits import InsufficientHistoryError
 from src.models.tracking import configure, prune_runs
 from src.pipeline_state import PipelineState
@@ -125,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    load_dotenv()
+    load_project_env()
     run(load_config(args.config), force=args.force)
     # A candidate that fails the gate is a healthy outcome, not a failed run.
     return 0

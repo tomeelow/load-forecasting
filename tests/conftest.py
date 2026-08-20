@@ -10,8 +10,17 @@ from pathlib import Path
 import pytest
 import requests
 
-from src import synthetic
+from src import config, synthetic
 from src.config import Config, load_config
+
+# Captured at import, before the autouse fixture below redirects it, so a test can still
+# ask what the real path is without being able to read the file.
+REAL_ENV_PATH = config.ENV_PATH
+
+
+@pytest.fixture(scope="session")
+def real_env_path() -> Path:
+    return REAL_ENV_PATH
 
 
 @pytest.fixture(scope="session")
@@ -40,18 +49,27 @@ def mlflow_store_outside_the_repository(monkeypatch, disposable_mlflow_store):
 
 
 @pytest.fixture(autouse=True)
-def offline_and_tokenless(monkeypatch):
+def offline_and_tokenless(monkeypatch, tmp_path):
     """Enforce the constraint rather than trusting it.
 
     The suite must pass on a machine with no network and no `.env`, so an accidental
     HTTP call or a real token in the environment fails loudly here instead of turning
     into a flaky test on someone else's laptop.
+
+    Deleting the variable is not enough on its own. Application code loads `.env` when
+    it starts — `create_app` does, `ingest.run` does — so the developer's real token
+    walked straight back into `os.environ` a moment after this fixture removed it.
+    Fourteen tests in `test_api.py` finished holding a live key. Nothing escaped,
+    because the transport above is blocked, but the guarantee this fixture advertises
+    was not true. Pointing the loader at a file that does not exist makes it true, and
+    still runs the real loading code rather than stubbing it out.
     """
 
     def refuse(*args, **kwargs):
         raise AssertionError("tests must not make network calls")
 
     monkeypatch.setattr(requests.sessions.Session, "request", refuse)
+    monkeypatch.setattr(config, "ENV_PATH", tmp_path / "absent.env")
     monkeypatch.delenv("ENTSOE_API_KEY", raising=False)
 
 

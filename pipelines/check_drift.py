@@ -18,10 +18,9 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
 from loguru import logger
 
-from src.config import Config, load_config
+from src.config import Config, load_config, load_project_env
 from src.ingestion.dataset import read_dataset
 from src.monitoring.drift import DriftResult, check_drift
 from src.pipeline_state import PipelineState
@@ -62,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-report", action="store_true", help="skip writing the HTML report")
     args = parser.parse_args(argv)
 
-    load_dotenv()
+    load_project_env()
     run(load_config(args.config), write_report=not args.no_report)
     # Drift is a finding, not a failure: exiting non-zero here would fail the workflow
     # and stop the retraining step that is supposed to respond to it.

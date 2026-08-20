@@ -137,6 +137,23 @@ def test_a_recent_run_does_not_widen_the_window(tmp_cfg, tmp_path):
     assert start == plain_start
 
 
+def test_run_loads_the_env_itself_rather_than_trusting_main(tmp_cfg, monkeypatch):
+    """A caller that never touches the command line still needs the token.
+
+    `main()` loaded `.env`; `run()` did not. A scheduler, a notebook or another module
+    calling `run()` directly got "ENTSOE_API_KEY is not set" with a perfectly good file
+    sitting unread beside it.
+    """
+    frame = synthetic.make_dataset(start="2024-01-01", end="2024-02-01")
+    stub_sources(monkeypatch, frame)
+    loaded = []
+    monkeypatch.setattr(ingest, "load_project_env", lambda: loaded.append(True))
+
+    ingest.run(tmp_cfg, full=True)
+
+    assert loaded, "run() must load the project .env before reaching make_client()"
+
+
 def test_a_successful_ingest_records_its_marker(tmp_cfg, tmp_path, monkeypatch):
     frame = synthetic.make_dataset(start="2024-01-01", end="2024-02-01")
     stub_sources(monkeypatch, frame)

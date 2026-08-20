@@ -24,10 +24,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
 from loguru import logger
 
-from src.config import Config, load_config
+from src.config import Config, load_config, load_project_env
 from src.evaluation.metrics import mape, point_metrics
 from src.ingestion.dataset import read_dataset
 from src.pipeline_state import PipelineState
@@ -121,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    load_dotenv()
+    load_project_env()
     run(load_config(args.config))
     return 0
 

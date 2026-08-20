@@ -1,8 +1,8 @@
-"""Typed access to config/config.yaml.
+"""Typed access to config/config.yaml, and the one place `.env` is loaded.
 
 Pipeline parameters live in YAML; secrets live in the environment. Nothing here
 reads a secret — see `src/ingestion/entsoe_client.py` for the one token this
-project needs.
+project needs. What lives here is where that token is *found*.
 """
 
 from __future__ import annotations
@@ -11,9 +11,32 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
+from loguru import logger
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "config.yaml"
+ENV_PATH = REPO_ROOT / ".env"
+
+
+def load_project_env() -> bool:
+    """Load the repository's `.env`. Returns whether a file was found.
+
+    Anchored to the repository root, like every other configured path (`_resolve`).
+    `python-dotenv`'s own discovery walks up from whichever module happens to call it,
+    which works but makes "which file" depend on where the call was written; naming the
+    path leaves nothing to infer, from any working directory.
+
+    **`override=False`, deliberately.** An exported variable is someone's decision — a
+    different token for one run, a CI secret injected by the workflow — and a file on
+    disk must not silently win against it. The consequence is worth knowing: an empty
+    `ENTSOE_API_KEY` exported in a shell shadows a perfectly good `.env`, and the error
+    then says the key is not set while the file plainly holds one.
+    """
+    found = load_dotenv(ENV_PATH, override=False)
+    if not found:
+        logger.debug("No .env at {}; relying on the ambient environment", ENV_PATH)
+    return found
 
 
 @dataclass(frozen=True)
