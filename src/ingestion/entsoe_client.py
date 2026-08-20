@@ -14,18 +14,45 @@ import os
 from typing import Protocol
 
 import pandas as pd
+import requests
 from entsoe.exceptions import NoMatchingDataError
 from loguru import logger
+from requests.adapters import HTTPAdapter, Retry
 
 LOAD_COLUMN = "load_mw"
 FORECAST_COLUMN = "tso_forecast_mw"
 
-# entsoe-py retries transient failures itself; what it does not do by default is time
-# out. A request that hangs forever hangs the scheduled run with it, and the job is
-# killed by the workflow timeout with nothing written and nothing said.
-REQUEST_TIMEOUT_S = 60
+# entsoe-py does not time out by default, and a request that hangs forever hangs the
+# scheduled run with it. It does retry — but only `ConnectionError`, `gaierror` and
+# `RemoteDisconnected` (see entsoe/decorators.py), and *not* a read timeout, which is
+# precisely what the Transparency Platform produces when it is busy and the caller is
+# asking for a year of 15-minute data. A full rebuild in CI died on exactly that.
+#
+# So: a bounded timeout, and retries mounted on the session, where they apply to each
+# HTTP request entsoe-py makes rather than to the whole multi-year call. Retrying the
+# call would re-fetch every year to recover one.
+REQUEST_TIMEOUT_S = 120
 RETRY_COUNT = 3
-RETRY_DELAY_S = 10
+RETRY_BACKOFF_S = 5  # urllib3 doubles this per attempt: ~0s, 10s, 20s
+RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+
+
+def _retrying_session() -> requests.Session:
+    """A session that retries the transient failures entsoe-py's own decorator misses."""
+    session = requests.Session()
+    retries = Retry(
+        total=RETRY_COUNT,
+        read=RETRY_COUNT,
+        connect=RETRY_COUNT,
+        status=RETRY_COUNT,
+        backoff_factor=RETRY_BACKOFF_S,
+        status_forcelist=RETRYABLE_STATUS,
+        allowed_methods=("GET",),
+        raise_on_status=False,
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    return session
+
 
 # Column names entsoe-py gives the parsed series, preferred over positional access.
 _ACTUAL_LOAD_LABEL = "Actual Load"
@@ -53,8 +80,7 @@ def make_client(api_key: str | None = None) -> LoadQueryClient:
         )
     return EntsoePandasClient(
         api_key=key,
-        retry_count=RETRY_COUNT,
-        retry_delay=RETRY_DELAY_S,
+        session=_retrying_session(),
         timeout=REQUEST_TIMEOUT_S,
     )
 
