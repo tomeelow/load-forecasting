@@ -32,6 +32,7 @@ from mlflow.tracking import MlflowClient
 
 from pipelines.train import train_horizon
 from src.config import Config, load_config
+from src.evaluation.splits import InsufficientHistoryError
 from src.models.tracking import configure, prune_runs
 from src.pipeline_state import PipelineState
 
@@ -40,6 +41,7 @@ PIPELINE = "retrain_if_needed"
 SKIPPED = "skipped"
 PROMOTED = "promoted"
 TRAINED_NOT_PROMOTED = "trained_not_promoted"
+INSUFFICIENT_DATA = "insufficient_data"
 
 
 @dataclass(frozen=True)
@@ -88,7 +90,15 @@ def run(
     logger.info("Retraining because: {}", reason)
     configure(cfg.mlflow)
     horizon = cfg.model.horizons[0]
-    result = train_horizon(cfg, horizon, tune=cfg.retraining.tune)
+    try:
+        result = train_horizon(cfg, horizon, tune=cfg.retraining.tune)
+    except InsufficientHistoryError as exc:
+        # A deployment too young to train is a fact about the data, not a failure of
+        # this pipeline, and failing the nightly job over it teaches whoever is on call
+        # to ignore a red loop. The flag stays raised and the marker stays where it was,
+        # so the question is asked again tomorrow with a day more history.
+        logger.warning("Retrain not possible yet: {}", exc)
+        return RetrainOutcome(INSUFFICIENT_DATA, f"{reason}; but {exc}", horizon)
 
     # Cleared on attempt, not on promotion: the flag asked whether a better model
     # exists, and "no" is an answer.
