@@ -7,18 +7,27 @@ this repository automates.
 1. **Create the Space.** At https://huggingface.co/new-space choose a name, pick
    **Docker → Blank**, hardware **CPU basic (free)**, visibility **Public**.
 
-2. **Push these files to it.** The Space is a git repository of its own; it needs the
-   project source plus the two files in this directory at its root.
+2. **Push these files to it.** The Space is a git repository of its own. It needs the
+   package, the lockfile, the Streamlit theme, and the two files in this directory at
+   its root. Run this from the repository root:
 
    ```bash
    git clone https://huggingface.co/spaces/<your-username>/<space-name> /tmp/space
-   rsync -a --exclude .git \
-       --include 'src/***' --include 'pipelines/***' --include 'config/***' \
-       --include '.streamlit/***' --include 'pyproject.toml' --include 'uv.lock' \
-       --exclude '*' ./ /tmp/space/
-   cp deploy/space/Dockerfile deploy/space/README.md /tmp/space/
+   ```
+
+   ```bash
+   cp -R src pipelines config .streamlit pyproject.toml uv.lock /tmp/space/ && \
+     cp deploy/space/Dockerfile deploy/space/README.md /tmp/space/
+   ```
+
+   ```bash
    cd /tmp/space && git add -A && git commit -m "Deploy dashboard" && git push
    ```
+
+   `deploy/space/README.md` lands as the Space's `README.md`, which does double duty:
+   Hugging Face reads its YAML front matter to configure the Space, and the build
+   backend needs *a* README present because `pyproject.toml` declares one. Omitting it
+   fails the build with a hatchling error that mentions neither.
 
 3. **Point it at the state branch.** In the Space's *Settings → Variables and secrets*,
    add a **variable** (not a secret — it is a public URL):
