@@ -193,7 +193,15 @@ def _backtest_error(cfg: Config, backtest: data.BacktestEvidence) -> None:
     columns = st.columns(3)
     columns[0].metric("Model MAPE", f"{model['mape']:.2f}%")
     columns[1].metric("PSE MAPE", f"{pse['mape']:.2f}%")
-    columns[2].metric("Gap", f"{gap:+.2f} pp", delta=f"{-gap:+.2f} pp", delta_color="normal")
+    # The delta carries the verdict rather than repeating the number with the sign
+    # flipped, which is what it used to do — two figures saying one thing, in opposite
+    # directions, next to each other.
+    columns[2].metric(
+        "Gap (model − PSE)",
+        f"{gap:+.2f} pp",
+        delta="model behind" if gap > 0 else "model ahead",
+        delta_color="inverse" if gap > 0 else "normal",
+    )
 
     naive = (
         f", naive seasonal {overall.loc[NAIVE_SEASONAL, 'mape']:.2f}%"
