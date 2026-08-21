@@ -379,3 +379,80 @@ def test_one_slow_year_does_not_restart_the_others(monkeypatch, cfg):
 
     assert attempts["2020-01-01"] == 2  # retried
     assert attempts["2019-01-01"] == 1  # and the year before it was not re-fetched
+
+
+class TestDayAheadArchive:
+    """The forecast archive used to measure the train-serve weather skew.
+
+    It is not on the ingestion path and never reaches the served dataset, but it decides
+    a headline number, so what it asks for and what it returns both matter.
+    """
+
+    @staticmethod
+    def responder(seen: list[dict]):
+        def get(url, params=None, timeout=None):
+            seen.append({"url": url, **(params or {})})
+            requested = params["hourly"].split(",")
+            return http_response(
+                200,
+                {
+                    "utc_offset_seconds": 0,
+                    "hourly": {
+                        "time": ["2024-05-01T00:00", "2024-05-01T01:00"],
+                        **{v: [7.5, 8.5] for v in requested},
+                    },
+                },
+            )
+
+        return get
+
+    def test_it_asks_the_forecast_archive_not_the_observation_archive(self, monkeypatch, cfg):
+        """Asking the archive endpoint would silently measure nothing at all."""
+        seen = []
+        monkeypatch.setattr(weather_client.requests, "get", self.responder(seen))
+
+        weather_client.fetch_national_day_ahead(cfg.weather, "2024-05-01", "2024-05-01")
+
+        assert {call["url"] for call in seen} == {cfg.weather.historical_forecast_url}
+
+    def test_it_requests_the_previous_day_vintage_of_every_variable(self, monkeypatch, cfg):
+        seen = []
+        monkeypatch.setattr(weather_client.requests, "get", self.responder(seen))
+
+        weather_client.fetch_national_day_ahead(cfg.weather, "2024-05-01", "2024-05-01")
+
+        requested = seen[0]["hourly"].split(",")
+        assert requested == [f"{v}_previous_day1" for v in cfg.weather.variables]
+
+    def test_the_suffix_is_stripped_back_to_our_column_names(self, monkeypatch, cfg):
+        """Otherwise the frame cannot be swapped into the dataset it is measured against."""
+        monkeypatch.setattr(weather_client.requests, "get", self.responder([]))
+
+        national = weather_client.fetch_national_day_ahead(cfg.weather, "2024-05-01", "2024-05-01")
+
+        assert set(national.columns) == {"temp_c", "wind_ms", "cloud_cover", "humidity_pct"}
+
+    def test_a_lead_of_less_than_a_day_is_refused(self):
+        with pytest.raises(ValueError, match="at least 1"):
+            weather_client._lead_suffix(0)
+
+    def test_a_longer_lead_changes_the_vintage_requested(self, monkeypatch, cfg):
+        import dataclasses
+
+        seen = []
+        monkeypatch.setattr(weather_client.requests, "get", self.responder(seen))
+        two_days = dataclasses.replace(cfg.weather, historical_forecast_lead_days=2)
+
+        weather_client.fetch_national_day_ahead(two_days, "2024-05-01", "2024-05-01")
+
+        assert all(v.endswith("_previous_day2") for v in seen[0]["hourly"].split(","))
+
+    def test_an_unconfigured_endpoint_is_refused_rather_than_guessed(self, cfg):
+        import dataclasses
+
+        without = dataclasses.replace(cfg.weather, historical_forecast_url="")
+
+        with pytest.raises(ValueError, match="historical_forecast_url"):
+            weather_client.fetch_city_day_ahead(
+                cfg.weather.cities[0], "2024-05-01", "2024-05-01", without
+            )

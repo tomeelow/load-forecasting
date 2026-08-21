@@ -103,6 +103,10 @@ class WeatherConfig:
     variables: tuple[str, ...]
     cities: tuple[City, ...]
     request: RequestConfig
+    # Open-Meteo's archive of past forecast runs. Evaluation-only — see the note in
+    # config.yaml and `fetch_national_day_ahead`.
+    historical_forecast_url: str = ""
+    historical_forecast_lead_days: int = 1
 
 
 @dataclass(frozen=True)
@@ -287,6 +291,8 @@ def load_config(path: Path | None = None) -> Config:
             variables=tuple(weather["variables"]),
             cities=cities,
             request=RequestConfig(**weather["request"]),
+            historical_forecast_url=weather.get("historical_forecast_url", ""),
+            historical_forecast_lead_days=int(weather.get("historical_forecast_lead_days", 1)),
         ),
         features=FeaturesConfig(**raw["features"]),
         validation=ValidationConfig(**raw["validation"]),

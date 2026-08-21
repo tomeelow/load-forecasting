@@ -133,6 +133,7 @@ def _fit_variants(
     *,
     tuned_params: dict[str, object] | None,
     fit_kwargs: dict[str, object],
+    wanted: tuple[str, ...] | None = None,
 ) -> dict[str, lgbm.TrainedModel]:
     """Fit each variant on one origin's training block.
 
@@ -146,6 +147,10 @@ def _fit_variants(
     }
     if tuned_params is not None:
         specs[TUNED] = (all_columns, tuned_params)
+    if wanted is not None:
+        specs = {name: spec for name, spec in specs.items() if name in wanted}
+        if not specs:
+            raise ValueError(f"None of {wanted} is a known variant; pick from {TABLE_ORDER}")
 
     return {
         name: lgbm.train(
@@ -168,6 +173,8 @@ def run_backtest(
     test_days: int,
     step_days: int,
     max_splits: int | None = None,
+    first_test_start: pd.Timestamp | None = None,
+    variants: tuple[str, ...] | None = None,
     inner_validation_days: int = 45,
     tune: bool = True,
     n_trials: int = 20,
@@ -185,6 +192,10 @@ def run_backtest(
     frozen. Re-tuning at every origin would cost an order of magnitude more compute for a
     result nobody could attribute; tuning once on the earliest data leaks nothing, because
     every test block still lies in that origin's future.
+
+    `first_test_start` anchors coverage to a chosen window instead of to wherever the data
+    happens to begin, and `variants` narrows the fitted set — both exist for the audit in
+    `pipelines/audit.py`, which needs one variant over a specific recent year.
     """
     features = make_features(frame, horizon, rolling_window=rolling_window, weekly_lag=weekly_lag)
     columns = feature_columns(list(features.columns))
@@ -197,6 +208,7 @@ def run_backtest(
         test_days=test_days,
         step_days=step_days,
         max_splits=max_splits,
+        first_test_start=first_test_start,
     )
 
     fit_kwargs = {
@@ -240,7 +252,13 @@ def run_backtest(
             train_index, validation_days=inner_validation_days, horizon=horizon
         )
         models = _fit_variants(
-            X, y, inner_train, inner_val, tuned_params=tuned_params, fit_kwargs=fit_kwargs
+            X,
+            y,
+            inner_train,
+            inner_val,
+            tuned_params=tuned_params,
+            fit_kwargs=fit_kwargs,
+            wanted=variants,
         )
         block = pd.DataFrame({ACTUAL: y.loc[test_index]})
         for name, model in models.items():

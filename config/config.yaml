@@ -25,6 +25,14 @@ ingestion:
 weather:
   archive_url: https://archive-api.open-meteo.com/v1/archive
   forecast_url: https://api.open-meteo.com/v1/forecast
+  # Open-Meteo's archive of past *forecast* runs. Used only by the evaluation, never by
+  # ingestion or serving: it is what makes the train-serve weather skew measurable
+  # instead of merely stated, by supplying the value that was forecast a day ahead of
+  # each hour rather than the value later observed. See docs/evaluation_notes.md.
+  historical_forecast_url: https://historical-forecast-api.open-meteo.com/v1/forecast
+  # Lead time, in days, of the archived forecast used for the weather-skew measurement.
+  # 1 is the day-ahead vintage a day-ahead model would actually have been served.
+  historical_forecast_lead_days: 1
   # Open-Meteo is free, keyless and occasionally slow. A timeout or a 503 on one of the
   # seven city calls must not be what ends a nightly run, so transient failures are
   # retried with exponential backoff. A 4xx other than 429 is a malformed request, not
