@@ -141,3 +141,31 @@ def test_one_image_serves_both_services():
 
     assert api["build"] == dashboard["build"]
     assert api["command"] != dashboard["command"]
+
+
+def test_the_image_copies_everything_the_build_backend_needs():
+    """`pyproject.toml` names a readme, and hatchling refuses to install without it.
+
+    The image never reads README.md. It still has to be in the build context, and the
+    failure is a stack trace from inside a temporary build environment that says nothing
+    about the Dockerfile. CI caught this one; this pins it.
+    """
+    for dockerfile in (DOCKERFILE, REPO_ROOT / "deploy" / "space" / "Dockerfile"):
+        text = dockerfile.read_text()
+        assert "README.md" in text, f"{dockerfile.name} never copies the declared readme"
+
+
+def test_the_readme_is_not_excluded_from_the_build_context():
+    ignored = (REPO_ROOT / ".dockerignore").read_text().splitlines()
+
+    assert "README.md" not in ignored
+    assert "*.md" not in ignored
+
+
+def test_the_dependency_layer_does_not_depend_on_the_readme():
+    """Editing prose must not re-resolve every dependency."""
+    lines = DOCKERFILE.read_text().splitlines()
+    first_sync = next(i for i, line in enumerate(lines) if "--no-install-project" in line)
+    readme = next(i for i, line in enumerate(lines) if line.startswith("COPY README.md"))
+
+    assert readme > first_sync
