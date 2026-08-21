@@ -1,322 +1,420 @@
 # Day-Ahead Electricity Load Forecasting — Polish Bidding Zone
 
-> **Status:** Phases 0–8 complete — the loop is closed. Real ENTSO-E data is ingested
-> daily, forecasts are served from the registered champion and logged, served
-> predictions are scored against actuals as they arrive, drift is monitored against a
-> season-matched reference, and retraining runs behind the promotion gate without
-> anyone present. The Streamlit dashboard and the deployment target are what remain.
+Hourly forecasts of how much electricity Poland will use tomorrow, benchmarked against
+the grid operator's own published forecast.
 
-## What this is
+Poland's transmission system operator, **PSE**, has to decide a day in advance how much
+generation to schedule. Too little and the system buys expensive balancing energy at
+short notice; too much and plants are paid to stand ready for demand that never arrives.
+The whole day-ahead market clears on that number. PSE publishes its own forecast to the
+ENTSO-E Transparency Platform, which means anyone building a demand model has something
+most forecasting projects lack: **a real operational benchmark, not a strawman.** Every
+result below is reported against it.
 
-Hourly, day-ahead forecasts of total electricity demand for the Polish bidding zone
-(PSE's control area). Day-ahead load is the number the grid operator dispatches
-against and the number the day-ahead market clears on: generation must be scheduled
-a day in advance, so an error of a few hundred MW is paid for in balancing costs.
+The point of this repository is the loop rather than the model. Ingestion → a versioned
+dataset → leakage-safe features → tracked training → a gated promotion → serving →
+drift monitoring → automated retraining, running daily on free infrastructure. LightGBM
+on engineered features is the easy part.
 
-The system is built as a production loop rather than a notebook — ingestion →
-versioned dataset → leakage-safe features → tracked training → gated promotion →
-serving → drift monitoring → automated retraining. The distinguishing constraint is
-the benchmark: ENTSO-E publishes **PSE's own day-ahead forecast** alongside the
-actuals, so every result is reported against the forecast the TSO actually operates
-on, not only against a naive baseline.
+<!-- BENCHMARK-HEADLINE -->
+
+---
 
 ## Architecture
 
-**TODO** — Mermaid/Excalidraw diagram of the MLOps loop (see
-[`docs/load_forecasting_mlops_plan.md`](docs/load_forecasting_mlops_plan.md) for the
-ASCII version this will be redrawn from).
+```mermaid
+flowchart LR
+    subgraph sources["Sources — free"]
+        direction TB
+        entsoe["<b>ENTSO-E</b><br/>actual load<br/><b>+ PSE forecast</b>"]
+        meteo["<b>Open-Meteo</b><br/>weather, 7 cities<br/>archive + forecast"]
+    end
+
+    dataset[("dataset.parquet<br/>UTC-hourly<br/>content-fingerprinted")]
+    features["<b>make_features(df, H)</b><br/>one builder — training<br/><i>and</i> serving<br/>every load lag ≥ H"]
+    gate{"<b>promotion gate</b><br/>beats naive?<br/>no regression<br/>vs champion?"}
+    registry[("<b>MLflow registry</b><br/>@champion")]
+    predlog[("<b>prediction log</b><br/>every served hour<br/>+ its features")]
+    state[("orphan branch<br/><b>pipeline-state</b><br/>ADR-008")]
+
+    subgraph loop["GitHub Actions — daily, 05:30 UTC"]
+        direction TB
+        ingest["<b>ingest</b><br/>trailing re-pull<br/>pandera checks"]
+        evaluate["<b>evaluate</b><br/>score served hours<br/>as actuals arrive"]
+        drift["<b>check_drift</b><br/>Evidently, seasonal<br/>reference · sets flag"]
+        retrain["<b>retrain_if_needed</b><br/>cadence or flag"]
+        fc["<b>forecast</b><br/>day-ahead from<br/>the champion"]
+        ingest --> evaluate --> drift --> retrain --> fc
+    end
+
+    subgraph serving["Serving"]
+        direction TB
+        api["<b>FastAPI</b><br/>/forecast · /health<br/>/reload-model"]
+        dash["<b>Streamlit</b><br/>forecast · benchmark<br/>drift · model card"]
+    end
+
+    sources --> ingest
+    ingest --> dataset --> features
+    dataset --> drift
+    features --> retrain --> gate
+    gate -->|"passes"| registry
+    gate -->|"fails — production untouched"| registry
+    registry --> fc
+    features --> fc --> predlog --> evaluate
+    registry --> api --> predlog
+
+    state -.->|"restore"| ingest
+    fc -.->|"snapshot"| state
+    state -.->|"hourly mirror"| dash
+
+    style gate fill:#fef3c7,stroke:#d97706,stroke-width:2px
+    style entsoe fill:#dbeafe,stroke:#2563eb
+    style features fill:#dcfce7,stroke:#16a34a
+    style predlog fill:#f3e8ff,stroke:#9333ea
+```
+
+Everything runs on free tiers. The scheduled loop is GitHub Actions; the registry and
+the prediction log are carried between ephemeral runners on an orphan branch
+([ADR-008](docs/ADR.md)); the dashboard is a container that mirrors that branch.
+
+---
 
 ## Benchmark results
 
-Two numbers, measuring different things, and the difference matters. The **rolling-origin
-backtest** is the reported result: a full year of out-of-sample hours, refitted at 26
-origins. The **champion holdout** is what the promotion gate looked at when the model
-currently serving was promoted: one recent 60-day block. Neither is a substitute for the
-other, so both are here.
+<!-- BENCHMARK-BODY -->
 
-### Rolling-origin backtest — the reported figure
+---
 
-24-hour horizon, real ENTSO-E data (dataset `65a36efba487`): 26 expanding-window origins,
-**8,709 out-of-sample hours covering a full year** (2021-01-08 → 2022-01-07), with a
-24-hour embargo between each training window and the block it predicts. Baselines and
-PSE are scored on exactly the same hours. Full report, including every segment, in
-[`reports/benchmark_h24.md`](reports/benchmark_h24.md).
+## The engineering worth reading
 
-| Model | MAPE | RMSE (MW) | MAE (MW) | Bias (MW) | vs PSE forecast |
-|---|---|---|---|---|---|
-| Naive seasonal (`load[T−168]`) | 4.300% | 1339 | 839 | +6 | +1.641 pp worse |
-| Linear (calendar + weather) | 6.195% | 1504 | 1209 | −486 | +3.537 pp worse |
-| **PSE day-ahead forecast (ENTSO-E)** | 2.658% | 674 | 526 | +391 | *(the benchmark)* |
-| LightGBM (calendar + lags) | 2.158% | 648 | 428 | −76 | **−0.501 pp better** |
-| LightGBM (+ weather) | 1.983% | 593 | 392 | −100 | **−0.675 pp better** |
-| LightGBM (+ weather, tuned) | 1.947% | 584 | 385 | −114 | **−0.711 pp better** |
+Six decisions that shaped the result. Each is recorded in full, with the alternatives
+and what would change our mind, in [`docs/ADR.md`](docs/ADR.md).
 
-P10/P50/P90 pinball losses: 110.4 / 192.4 / 118.9 MW.
+### The leakage rule
 
-The model beats PSE's own day-ahead forecast by 0.71 pp of MAPE over the year — 27%
-lower error, 90 MW less RMSE. Weather is worth 0.175 pp of that (2.158% → 1.983%) and
-the Optuna search a further 0.036 pp, which is worth knowing before anyone spends a day
-on hyperparameters. PSE's forecast runs +391 MW high on average; ours runs 114 MW low.
+Forecasting `load[T]` from the standpoint of `T − H`, **every load-derived feature must
+be at least `H` hours old relative to the target.** A lag shorter than the horizon is a
+bug, not a tuning choice: the backtest looks spectacular and production is worthless,
+with no visible failure in between.
 
-### Where it loses
+Rows are indexed by **target hour**, not by prediction moment
+([ADR-005](docs/ADR.md)) — so the minimum lag is exactly `H`, not approximately. The
+first implementation followed the more obvious convention and quietly cost a factor of
+two: `load[t − H]` at row `t` is `load[T − 2H]` relative to the target, which throws
+away the freshest day of genuinely-available history for no safety gain.
 
-It loses in exactly the places with the fewest examples, and it loses badly:
+The guarantee is checked three ways at four horizons, in
+[`tests/test_no_leakage.py`](tests/test_no_leakage.py): **structurally** (read the
+generated columns, assert every offset), **behaviourally** (replace the future of the
+load series with an absurd sentinel and assert nothing on the past side moves), and
+**arithmetically** (recompute the rolling window and the target by hand). The
+behavioural test is the one that matters — it catches leakage the column names would
+never reveal.
 
-| Segment | Hours | Model MAPE | PSE MAPE | Gap |
-|---|---|---|---|---|
-| Christmas–New Year | 215 | 7.273% | 2.954% | **+4.319 pp** |
-| Holidays | 311 | 5.099% | 2.967% | **+2.132 pp** |
-| Winter | 2109 | 2.715% | 2.561% | +0.153 pp |
-| Weekends | 2470 | 2.053% | 2.658% | −0.605 pp |
-| Peak hours | 5445 | 2.025% | 2.719% | −0.693 pp |
-| Off-peak hours | 3264 | 1.816% | 2.558% | −0.742 pp |
-| Weekdays | 6239 | 1.905% | 2.658% | −0.754 pp |
-| Summer | 2208 | 1.577% | 2.853% | −1.277 pp |
+### One feature builder, used by training and by serving
 
-A 7.3% MAPE across the Christmas–New Year week against PSE's 2.95% is the single worst
-result in this repository, and it is not a rounding error: those 215 hours are a demand
-regime the model has seen twice in its training data and a human dispatcher has seen
-every year of their career. A holiday flag is not enough — the week behaves like neither
-a weekday nor a weekend nor a normal holiday, and PSE's forecasters know that. This is
-the first thing to fix, and it is the reason the segment table is reported worst-first
-rather than best-first.
+[`make_features`](src/features/builder.py) is called by the training pipeline, the
+backtest, the API and the scheduled forecast step. There is no second copy in the
+serving layer, because divergence between two implementations of the same transform is
+a silent and expensive bug class. The serving side
+([`src/features/inference.py`](src/features/inference.py)) contains no feature logic at
+all — it splices recorded history to forecast weather and hands the result to the same
+function.
 
-**What this year is and is not.** The backtest starts where the data allows: with
-`initial_train_days: 730`, the first origin sits two years after 2019-01-01, so the
-covered year is 2021 — the earliest available, not the most recent. 2021 also carries
-pandemic-recovery demand. Sweeping every origin the data supports (`max_splits: null`,
-~146 origins, 2021 → 2026) is the same methodology at roughly ten hours of compute
-instead of forty minutes; the section below is what covers the recent period until that
-is run.
+### Train–serve weather skew, measured rather than mentioned
 
-### Champion holdout — what is serving now
+Training sees *observed* weather. Serving only ever sees *forecast* weather, which is
+worse. Train on the first and serve on the second and live accuracy quietly falls below
+the backtest, with nothing in the logs to say why.
 
-The registered champion (`pl_load_lgbm@champion`, v4) was trained and gated on a single
-chronological 60-day block, **2026-06-07 → 2026-08-06, 1,440 hours** of real data:
+This repository used to state that honestly and leave it unquantified. It is now
+measured: the audit re-runs the whole backtest with the weather features replaced by
+**what Open-Meteo actually forecast a day ahead** of each hour, from its archive of past
+forecast runs. <!-- WEATHER-SKEW -->
 
-| Model | MAPE | vs PSE |
-|---|---|---|
-| Naive seasonal | 5.732% | +2.640 pp worse |
-| **PSE day-ahead forecast** | 3.092% | *(the benchmark)* |
-| LightGBM (calendar + lags) | 2.701% | −0.391 pp better |
-| LightGBM (+ weather) | 2.170% | −0.922 pp better |
-| **LightGBM (+ weather, tuned) — champion** | 2.115% | −0.977 pp better |
+### Seasonality is not drift
 
-Read this as gate evidence, not as a published result, for two reasons. It is **one draw
-from one summer**: PSE's own MAPE in that window is 3.09% against an annual range of
-2.2–3.2% across 2019–2026 (July 2026 alone was 3.57%), so some of the margin is the
-window rather than the model. And the block doubles as the **early-stopping set**, so the
-iteration count was chosen on the hours being scored — the backtest above avoids that
-with a second embargoed split inside each origin, which is precisely why it, and not
-this, is the reported figure.
+Input drift fires on most nights, and that is the correct behaviour rather than a fault.
+The current window is a fortnight of one realised season judged against a three-year
+season-matched reference — a narrow distribution against a wide one — so a normed
+Wasserstein distance above the threshold is close to guaranteed
+([ADR-009](docs/ADR.md)).
 
-Regenerate either with:
+The response is not to tune the threshold until the alarms stop, because a threshold high
+enough to ignore an October temperature swing is also high enough to ignore a real
+October regime change. Instead: input drift is treated as an **early warning that
+triggers a retrain attempt**, and the promotion gate is what actually protects
+production. The dashboard shows the drifted share as a trend rather than a red light,
+because a permanently red light gets muted, and a muted alert is not a control.
 
-```bash
-uv run python -m pipelines.backtest
+That ADR also carries a correction worth reading: the original version rested on a
+sentence that was false. Evidently returns a p-value on small samples and a distance on
+large ones, picking by sample size rather than being told, and the parser read every
+value as a p-value — so on every real comparison it reported the *complement* of the
+drifted columns. The finding, the cause, and what it invalidated are recorded rather
+than quietly patched.
+
+### The gate holding a candidate back
+
+The clearest evidence the system works is a night it declined to do anything. A
+scheduled retrain on 2026-08-20 produced a candidate at **2.31% MAPE** against a
+champion holding **2.11%** on the same metric. It was logged to MLflow with its params,
+metrics and dataset fingerprint — and left there. The `@champion` alias did not move.
+
+```
+Retrain: TRAINED_NOT_PROMOTED — drift flag raised
+  gate: candidate 2.308 regresses past the champion's 2.115
 ```
 
-```bash
-uv run python -m pipelines.train
-```
+Unattended retraining that can silently make production worse is worse than no
+unattended retraining. This is also a limitation, not only a triumph — see below.
+
+### State that survives an ephemeral runner
+
+GitHub's runners are destroyed when the job ends, and one piece of state cannot be
+recreated: **the prediction log.** What the model said about tomorrow can only be
+recorded before tomorrow happens. `actions/cache` is evicted after seven days with no
+durability guarantee; workflow artifacts expire and cannot be updated in place; an object
+store needs an account and a bill. So the loop force-pushes a single snapshot of
+`state/`, `mlruns/` and `data/processed/` to an orphan branch, and restores it at the
+start of the next run ([ADR-008](docs/ADR.md)). The hosted dashboard reads that same
+branch.
+
+---
 
 ## Data inventory
 
 | Data | Source | Resolution | Range | Notes |
 |---|---|---|---|---|
-| Actual total load (PL) | ENTSO-E Transparency Platform | native 15-min or 60-min → resampled to hourly | 2019-01-01 → now (start date in [`config/config.yaml`](config/config.yaml)) | the target |
-| Day-ahead load forecast (PL) | ENTSO-E Transparency Platform | hourly | same | the benchmark (PSE) |
-| Historical weather | Open-Meteo Archive API | hourly | same, up to ~5 days behind real time | 7 cities, population-weighted |
-| Forecast weather | Open-Meteo Forecast API | hourly | the days the archive has not reached, plus the future | used at serving time and for the freshest ingested hours |
+| Actual total load (PL) | ENTSO-E Transparency Platform | native 15-min or 60-min → resampled hourly (mean) | 2019-01-01 → now | the target |
+| Day-ahead load forecast (PL) | ENTSO-E Transparency Platform | hourly | same | **the benchmark** (PSE's own) |
+| Historical weather | Open-Meteo Archive API | hourly | same, lags real time ~5 days | 7 cities, population-weighted |
+| Forecast weather | Open-Meteo Forecast API | hourly | the days the archive has not reached, plus the future | used at serving time |
+| Day-ahead forecast weather | Open-Meteo Historical Forecast API | hourly | 2021-03 → now (temperature); 2024-01 → now (wind, cloud) | **evaluation only** — measures the train–serve skew |
 | Public holidays | `holidays` (PL), offline | daily | — | evaluated on the **Europe/Warsaw** calendar date |
 
-Everything is stored and computed on a **UTC** hourly index. `Europe/Warsaw` is used
-only where the local calendar is semantically required (holiday flags) and for display.
+Everything is stored and computed on a **UTC** hourly index. `Europe/Warsaw` is used only
+where the local calendar is semantically required (holiday flags, the hour-of-day
+features people actually behave on) and for display. Both DST transitions are covered by
+tests: Warsaw loses an hour each spring and repeats one each autumn, and naive resampling
+across those boundaries produces NaNs or duplicate-index errors.
 
-## The train–serve weather skew
+### Getting an ENTSO-E token
 
-At training time the weather features come from Open-Meteo's *archive* (observed
-weather). At serving time they can only come from the *forecast* endpoint, which is
-less accurate — so a model trained on perfect weather will do measurably worse live
-than its backtest suggests, with no visible failure.
+It has a lead time, so do it first.
 
-The ingestion layer keeps both paths available
-([`src/ingestion/weather_client.py`](src/ingestion/weather_client.py) exposes an
-archive fetch and a forecast fetch producing the identical column set), and the
-feature builder is horizon-parametrised so the same code path serves both.
+1. Register at <https://transparency.entsoe.eu/>.
+2. Email `transparency@entsoe.eu` with **"Restful API access"** in the subject and your
+   registered email address in the body.
+3. Access is granted within about three working days. The token then appears in your
+   account under *Web API Security Token*.
 
-### What the ingested data can and cannot say about it
+Put it in `.env` as `ENTSOE_API_KEY` (see [`.env.example`](.env.example)). It is a
+secret and is never committed. Open-Meteo needs no key at all.
 
-**The two paths do disagree.** A full ingest keeps archive values wherever the archive
-reaches (it lags real time by about five days) and fills the rest from the forecast
-endpoint, so the freshest hours of the stored dataset are forecast-sourced and can be
-compared against the archive once it catches up. Measured on the dataset as it stood
-after the 2026-08-06 ingest, over the 192 forecast-sourced hours it then held
-(2026-07-30 → 2026-08-06):
+Without a token, training and the backtest fall back to the synthetic generator in
+[`src/synthetic.py`](src/synthetic.py) so the loop still runs end to end. Those runs are
+named `*_synthetic`, tagged `data_source=synthetic` in MLflow, carry a banner on every
+report, and light up a full-width warning on the dashboard. A metric from invented data
+measures the plumbing and nothing else.
 
-| Feature | MAE | RMSE | Bias |
-|---|---|---|---|
-| `temp_c` | 0.90 °C | 1.14 °C | +0.64 °C |
-| `wind_ms` | 0.35 m/s | 0.49 m/s | +0.13 m/s |
-| `cloud_cover` | 17.4 pp | 23.9 pp | +14.0 pp |
-
-Substituting one for the other moves the champion's forecast by **92 MW on average
-(0.54% of load), and by up to 444 MW** in the worst hour — the input difference is not
-cosmetic.
-
-**What that costs in accuracy cannot be measured from what is stored, and the numbers
-above are not the skew.** Three reasons, all of them disqualifying on their own:
-
-- **The lead time is wrong and unknown.** Those forecast-sourced hours were pulled with
-  `past_days`, so for hours already in the past Open-Meteo answers from its most recent
-  model run — not from the forecast that was issued 24 hours before the target, which is
-  what serving actually uses. The comparison mixes lead-time error with the plain
-  difference between a reanalysis (the archive) and a forecast model.
-- **The sample is eight days of one summer.** Over the 182 of those hours that have a
-  published actual, the champion scores 2.035% MAPE on the stored weather and 2.053% on
-  the observed archive. The gap is smaller than the noise and points the wrong way; those
-  hours also sit inside the champion's own early-stopping block, so they are not
-  out-of-sample either.
-- **Nothing records which path a row came from.** The dataset has one `data_source_version`
-  per row for the ingestion run, not per column for the weather source, and a later run
-  overwrites forecast weather with archive weather in place. The evidence is erased on a
-  seven-day delay.
-
-**The envelope, which is measurable.** Weather is worth 0.175 pp of MAPE over the
-backtest year (2.158% without it, 1.983% with it) and 0.53 pp on the 60-day holdout.
-Forecast weather is worse than observed weather but far better than no weather, so the
-skew penalty lives inside that gap — it cannot quietly be half a percentage point over a
-year. That is a bound, not a measurement, and it is stated as one.
-
-**TODO — what would make the real measurement possible**, in the order it should be done:
-
-1. Stamp the weather source per row at ingestion (`weather_source` ∈ `archive |
-   forecast`, plus the lead time in hours) so the question stops being unanswerable in
-   hindsight. This changes the dataset schema, so it needs the sign-off CLAUDE.md asks
-   for.
-2. Keep every daily forecast pull instead of overwriting it — one small parquet per run,
-   indexed by (issued_at, target hour). Nine months of that produces a genuine
-   day-ahead-aligned weather series with no new dependency and no new API.
-3. Only then re-run the rolling-origin backtest twice, once on each weather series, and
-   report both numbers here. Back-filling it sooner means Open-Meteo's Historical
-   Forecast API, which archives past forecast runs at fixed lead times — a new external
-   source, and therefore a decision rather than a task.
-
-Weather features are aligned to the **hour being predicted**, not to the moment the
-forecast is made. That is legitimate rather than leakage: Open-Meteo publishes the
-forecast for hour `T` well before `T` arrives, so the value exists at prediction time.
-Nothing equivalent is true of the load series, which is exactly why this project is
-interesting. See [ADR-005](docs/ADR.md) for the row-indexing convention that makes the
-alignment explicit.
+---
 
 ## Setup
 
 ```bash
-git clone <repo> && cd load-forecasting
-uv sync
-uv run pre-commit install
-cp .env.example .env   # then paste your ENTSO-E token into ENTSOE_API_KEY
+git clone https://github.com/tomeelow/load-forecasting.git && cd load-forecasting
 ```
-
-On macOS, LightGBM needs the OpenMP runtime, which is not a Python package:
 
 ```bash
-brew install libomp
+uv sync && cp .env.example .env
 ```
-
-Run the test suite (no network and no `.env` required — the suite runs against a
-synthetic Polish load series):
 
 ```bash
 uv run pytest
 ```
 
-Ingest the full configured history, then keep it current:
+The test suite needs **no network and no token** — that is enforced by
+[`tests/conftest.py`](tests/conftest.py), which blocks HTTP at the transport and points
+the `.env` loader at a file that does not exist, rather than trusting the constraint.
+
+Those three commands were run against a fresh `git clone` of this repository on
+2026-08-21: **450 tests passed in 77 seconds**, with no token in the environment. The
+same three run in CI on every pull request
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+
+On macOS, LightGBM needs the OpenMP runtime, which is not a Python package:
+`brew install libomp`.
+
+Paste your ENTSO-E token into `.env`, then pull the history and serve:
 
 ```bash
 uv run python -m pipelines.ingest --full
 ```
 
 ```bash
-uv run python -m pipelines.ingest
+uv run streamlit run src/dashboard/app.py
 ```
 
-The second form re-pulls only a trailing window (`ingestion.trailing_repull_days` in
-config) and merges it over the existing dataset, because ENTSO-E revises "actual"
-values after first publication.
-
-Train the baselines and every LightGBM variant, log them to MLflow and run the
-promotion gate:
+### The full stack
 
 ```bash
-uv run python -m pipelines.train
+docker compose up
 ```
 
-Produce the benchmark table from a rolling-origin backtest (~45 minutes for the
-configured 26 origins: a five-minute Optuna search, then a full refit of every variant
-and of the quantile band at each origin — use `--max-splits 3` for a quick check):
+Brings up MLflow on Postgres (`:5000`), the forecast API (`:8000`) and the dashboard
+(`:8501`). The registry starts empty, so the API answers `/health` with 503 and the
+dashboard names the model it cannot find — that is the correct first-run state. Populate
+it with a training run through the same image:
 
 ```bash
-uv run python -m pipelines.backtest
+docker compose run --rm trainer python -m pipelines.train
 ```
 
-Browse the tracked runs, the registered model and the champion alias:
+> **The image builds; the stack has not been run.** CI validates the Compose file and
+> builds the API image from a clean checkout on every push
+> ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) — that is what caught the
+> missing `COPY README.md` the build backend needed. `tests/test_compose.py` additionally
+> checks the wiring as data: services, shared volumes, published ports, the OpenMP
+> runtime LightGBM needs, and that the code honours `MLFLOW_TRACKING_URI`.
+>
+> What has *not* happened is `docker compose up` — no container has been started, so the
+> four services have never been seen talking to each other. Treat the one-command stack
+> as unproven until someone runs it.
+
+### Everything else
 
 ```bash
+uv run python -m pipelines.train          # baselines + LightGBM variants + the gate
+uv run python -m pipelines.backtest       # the rolling-origin benchmark table
+uv run python -m pipelines.audit          # the fairness audit (hours of compute)
+uv run uvicorn src.api.main:app --port 8000
 uv run mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db
 ```
 
-Serve forecasts from the registered champion:
-
-```bash
-uv run uvicorn src.api.main:app --port 8000
-```
-
-The four pipelines of the scheduled loop, each runnable on its own for debugging:
+The five pipelines of the scheduled loop, each runnable alone for debugging:
 
 ```bash
 uv run python -m pipelines.ingest
-```
-
-```bash
 uv run python -m pipelines.evaluate
-```
-
-```bash
 uv run python -m pipelines.check_drift
-```
-
-```bash
 uv run python -m pipelines.retrain_if_needed
+uv run python -m pipelines.forecast
 ```
 
 They run in that order daily via
-[`.github/workflows/daily-loop.yml`](.github/workflows/daily-loop.yml), which also
-carries state between runs — see [ADR-008](docs/ADR.md). Trigger one by hand with:
+[`.github/workflows/daily-loop.yml`](.github/workflows/daily-loop.yml). Trigger one by
+hand with:
 
 ```bash
 gh workflow run daily-loop.yml -f force_retrain=false
 ```
 
-`pipelines.ingest` needs an `ENTSOE_API_KEY` and stops without one — there is nothing
-honest for it to pull. Training and the backtest do not: with no dataset on disk they
-fall back to the synthetic generator in [src/synthetic.py](src/synthetic.py) so the
-rest of the loop still runs end to end. Those runs are named `*_synthetic`, tagged
-`data_source=synthetic` in MLflow, and their reports carry a warning banner — a metric
-from invented data measures the plumbing, nothing else.
+**Scheduled retraining runs on GitHub Actions regardless of where anything is hosted.**
+The live loop does not depend on the API or the dashboard being up anywhere — that is
+what the state branch buys, and it is why the whole system costs nothing to run.
 
-**TODO** — `docker compose up` for the full stack (Phase 10).
+### Deploying the dashboard
+
+[`deploy/space/README-deploy.md`](deploy/space/README-deploy.md) has the Hugging Face
+Spaces route (Docker SDK, free tier, no payment method). The deployed page mirrors the
+`pipeline-state` branch hourly and says on the page that it is a mirror rather than a
+live service, because it cannot reach an API or fetch fresh weather. Render, Railway and
+Fly.io work the same way with the same two environment variables; free instances on all
+of them sleep when idle.
+
+> **TODO — deployed URL.** No Space exists yet: creating one needs a Hugging Face
+> account and a token, which is a step for the repository owner rather than something
+> this repository automates. Follow `deploy/space/README-deploy.md` and paste the link
+> here.
+
+---
 
 ## Screenshot
 
-**TODO** — forecast vs actual with the P10–P90 band (Phase 9).
+![Day-ahead forecast against realised load, with the model's P10–P90 band](docs/images/forecast_vs_actual.png)
+
+Ten days of realised demand in black, PSE's published day-ahead forecast dotted, and the
+model's own forecast in blue with its P10–P90 band. Regenerate it from whatever the
+pipelines currently hold with `uv run python -m src.dashboard.figures` — it is drawn by
+the same function that draws the dashboard, so the image cannot drift away from the page.
+
+---
+
+## Known limitations
+
+Every real system has rough edges. These are this one's.
+
+**Input drift fires on most nights, so the loop attempts a retrain most nights.** The
+cause is the shape of the comparison rather than the season — a fortnight against a
+three-year reference is narrow against wide — and a seasonal reference window cannot fix
+it, because it makes the reference *wider*. The promotion gate is the real safeguard;
+input drift is closer to a scheduler than to an alarm. The honest fix is a like-sized
+reference sample, a threshold chosen against a measured false-alarm rate, or demoting
+the input-drift trigger to report-only. That is an operational judgement with evidence
+still to gather, and it is recorded in [ADR-009](docs/ADR.md) rather than quietly
+patched.
+
+**The gate compares MAPE across different 60-day windows.** A candidate trained today is
+scored on the last 60 days; the champion's number came from the 60 days before *it* was
+promoted. A rough-weather month therefore looks like model regression, and the gate will
+refuse a candidate that is genuinely better on like-for-like data. The 2.31% vs 2.11%
+rejection above may well be an instance of exactly this. Fixing it means scoring both
+models on the same held-out block at gate time, which is a real change to
+[`src/models/promotion.py`](src/models/promotion.py) and is the first thing worth doing
+next.
+
+**Served-prediction monitoring is still accumulating.** The `forecast` step that fills
+the prediction log is new, so production error is measured over days rather than months.
+The dashboard says so — a panel reading "accumulating, N of 168" instead of a number —
+and it needs about a week of scheduled runs before the rolling MAPE means anything. The
+backtest is a year of out-of-sample hours and is a different claim; the two are never
+merged.
+
+**The one-time history rebuild is slow and all-or-nothing.** `pipelines.ingest --full`
+pulls seven years from two APIs. Measured on the CI run that built the current dataset
+(2026-08-20): **18m 15s** for the ingest step, against **15 seconds** for the incremental
+run the next morning. A failure part-way leaves nothing and starts over. Chunking the
+archive pull by year made timeouts survivable but did not make the rebuild resumable.
+
+**The loop has only recently started succeeding.** Every scheduled run from 2026-08-14
+to 2026-08-20 failed — a missing `setup-uv` tag, ENTSO-E read timeouts `entsoe-py` does
+not retry, an unchunked weather pull that timed out, and a first run with no state to
+bootstrap from. Each fix is a commit in the history. As of 2026-08-21 there have been two
+successful runs: one manual (21m 41s, including the full rebuild) and one scheduled
+(4m 16s). A week of green runs is what would make "operational" a fair word, and it has
+not happened yet.
+
+**The backtest tunes once and freezes.** Hyperparameters are searched on the first
+origin's training block and reused at every later one ([ADR-007](docs/ADR.md)). It leaks
+nothing, but a genuine regime change late in the window is handled with stale settings —
+which, if anything, understates the model.
+
+**One bidding zone, one horizon.** `model.horizons` is a list and the code is
+horizon-parametrised throughout, but only `[24]` has ever been trained and served.
+
+---
 
 ## What I'd do with more time
 
-**TODO** — to be written honestly once there are results to be honest about.
-Current candidates: multi-zone (CZ/SK/DE) transfer, probabilistic calibration via
-conformal prediction, and Prefect instead of GitHub Actions once the DAG outgrows a
-linear job.
+**Score the gate on a shared block.** The limitation above is the most consequential
+thing wrong with the system: the safeguard that protects production is comparing two
+numbers measured on different weather. Holding out one common evaluation block and
+scoring both champion and candidate on it would make the gate mean what it claims to.
+
+**Fix the holiday and Christmas–New Year regime.** The model's worst segment by a wide
+margin is the week between Christmas and New Year, where PSE's human forecasters beat it
+comfortably. A holiday flag is not enough — that week behaves like neither a weekday nor
+a weekend nor a normal holiday, and there are only a handful of them in the training
+data. A "days from nearest holiday" feature and explicit bridge-day handling are the
+obvious first attempts.
+
+**Calibrate the intervals.** The P10–P90 band comes from three independent quantile
+models, and nothing checks that 80% of actuals actually land inside it. Conformal
+prediction on the residuals would produce a band with a coverage guarantee instead of a
+band with a plausible shape, and pinball loss alone does not reveal the difference.
+
+---
 
 ## Repository layout
 
@@ -324,29 +422,36 @@ linear job.
 src/ingestion/   ENTSO-E + Open-Meteo clients, dataset assembly, validation
 src/features/    leakage-safe feature builder (shared by training and serving)
 src/models/      baselines, LightGBM, tuning, promotion gate, MLflow tracking
-src/evaluation/  metrics, chronological splits, rolling-origin backtest
+src/evaluation/  metrics, chronological splits, rolling-origin + gate-closure backtests
 src/api/         FastAPI service: /forecast, /health, /reload-model
-src/monitoring/  Evidently drift, the seasonal reference window, rolling performance
+src/monitoring/  Evidently drift, the seasonal reference window, the drift history
+src/dashboard/   Streamlit app, its data layer, and the hosted-mirror state sync
 src/             prediction log, pipeline state, holiday calendar, synthetic generator
-pipelines/       ingest, train, backtest + the loop: evaluate, check_drift,
-                 retrain_if_needed
+pipelines/       ingest, train, backtest, audit + the loop: evaluate, check_drift,
+                 retrain_if_needed, forecast
 config/          pipeline parameters (dates, cities, horizon, thresholds, bounds)
-tests/           leakage, DST, timezone, validation, retry, gate and loop tests
-docs/            plan + architecture decision record
+tests/           leakage, DST, timezone, validation, retry, gate, loop, dashboard
+docs/            plan, ADR, evaluation audit, blog post, demo script
+docker/          the image both services are built from
+deploy/space/    Hugging Face Spaces deployment
 reports/         generated benchmark tables (the .md files are versioned)
 monitoring/      generated drift reports (HTML, not versioned)
-state/           prediction log and last-success markers (not versioned; ADR-008)
+state/           prediction log, drift history, last-success markers (ADR-008)
 mlruns/          MLflow tracking database and artifacts (not versioned)
 ```
 
 ## Decisions
 
-Nine load-bearing choices are recorded with their reasoning in
-[`docs/ADR.md`](docs/ADR.md): LightGBM over Prophet/SARIMA, direct per-horizon
-forecasting over recursive, an MLflow registry plus a dataset content hash over ad-hoc
-artifact files (and over DVC, which would need a remote nobody is paying for),
-Evidently over a hand-rolled drift check, indexing feature rows by target hour,
-embargoing one horizon between training and test blocks, tuning once per backtest
+Ten load-bearing choices are recorded with their reasoning, their alternatives and what
+would change our mind in [`docs/ADR.md`](docs/ADR.md): LightGBM over Prophet/SARIMA,
+direct per-horizon forecasting over recursive, an MLflow registry plus a dataset content
+hash over ad-hoc artifact files (and over DVC, which would need a remote nobody is
+paying for), Evidently over a hand-rolled drift check, indexing feature rows by target
+hour, embargoing one horizon between training and test blocks, tuning once per backtest
 rather than per origin, carrying pipeline state on a force-pushed orphan branch, and
 measuring drift against the same weeks in previous years rather than against last
 fortnight.
+
+Two documents sit alongside them:
+[`docs/evaluation_notes.md`](docs/evaluation_notes.md), the audit of whether the PSE
+comparison is fair, and [`docs/blog.md`](docs/blog.md).
