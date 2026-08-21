@@ -301,7 +301,9 @@ def drift_panel(cfg: Config) -> None:
 
     report = _cached("latest_drift_report")
     if report is not None:
-        st.caption(f"Latest Evidently report: `{report}`")
+        # The name, not the path: on a hosted mirror the absolute path is a container
+        # directory that means nothing to whoever opened the link.
+        st.caption(f"Latest Evidently report on disk: `{report.name}`")
 
 
 # --------------------------------------------------------------------------------------

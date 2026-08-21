@@ -128,6 +128,12 @@ def rolling_error_figure(rolling: pd.DataFrame, tz: str) -> go.Figure:
 def drift_figure(history: pd.DataFrame, threshold: float) -> go.Figure:
     """The drifted share over time, with the trigger drawn on it — a trend, not a lamp."""
     figure = go.Figure()
+    # A new deployment has one or two checks, and Plotly autoscales a single timestamp
+    # down to milliseconds — an axis reading 09:07:48.0665 that looks like a bug rather
+    # than like a series with one point in it. Give it a day either side to sit in.
+    if len(history) < 3 and len(history):
+        pad = pd.Timedelta(days=1)
+        figure.update_xaxes(range=[history.index.min() - pad, history.index.max() + pad])
     figure.add_trace(
         go.Scatter(
             x=history.index,

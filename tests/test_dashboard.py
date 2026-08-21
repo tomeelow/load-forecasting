@@ -326,3 +326,56 @@ class TestSyntheticLabelling:
 
     def test_an_untagged_run_is_unknown_rather_than_assumed_real(self):
         assert data.ModelCard(version="1").data_source == "unknown"
+
+
+class TestFiguresOnThinData:
+    """A new deployment has one drift check and no served history. Charts still have to read."""
+
+    @staticmethod
+    def one_check() -> pd.DataFrame:
+        frame = pd.DataFrame({"drift_share": [0.55], "drifted_features": [6]})
+        frame.index = pd.DatetimeIndex([pd.Timestamp("2026-08-21 09:07:48", tz="UTC")])
+        return frame
+
+    def test_a_single_drift_check_does_not_produce_a_millisecond_axis(self):
+        """Plotly autoscales one timestamp down to milliseconds, which looks like a bug."""
+        from src.dashboard.figures import drift_figure
+
+        figure = drift_figure(self.one_check(), 0.3)
+
+        low, high = figure.layout.xaxis.range
+        assert (pd.Timestamp(high) - pd.Timestamp(low)) >= pd.Timedelta(days=2)
+
+    def test_a_long_history_is_left_to_autoscale(self):
+        from src.dashboard.figures import drift_figure
+
+        history = pd.DataFrame(
+            {"drift_share": [0.4, 0.5, 0.6, 0.7]},
+            index=pd.date_range("2026-08-01", periods=4, freq="D", tz="UTC"),
+        )
+
+        assert drift_figure(history, 0.3).layout.xaxis.range is None
+
+    def test_the_forecast_chart_renders_with_actuals_and_no_served_forecast(self, dataset):
+        """The state between the first ingest and the first forecast run."""
+        from src.dashboard.figures import forecast_figure
+
+        actuals = dataset[["load_mw", "tso_forecast_mw"]].tail(240)
+        empty = pd.DataFrame(index=pd.DatetimeIndex([], tz="UTC"))
+
+        figure = forecast_figure(actuals, empty, "Europe/Warsaw")
+
+        assert len(figure.data) == 2
+        assert {trace.name for trace in figure.data} == {"Actual load", "PSE day-ahead"}
+
+    def test_the_band_is_omitted_when_the_champion_has_no_quantiles(self, dataset):
+        from src.dashboard.figures import forecast_figure
+
+        served = pd.DataFrame(
+            {"load_mw": [20000.0] * 24, "p10": [None] * 24, "p90": [None] * 24},
+            index=pd.date_range("2026-08-21", periods=24, freq="h", tz="UTC"),
+        )
+
+        figure = forecast_figure(pd.DataFrame(), served, "Europe/Warsaw")
+
+        assert {trace.name for trace in figure.data} == {"Model forecast"}
