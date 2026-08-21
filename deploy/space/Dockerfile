@@ -33,6 +33,11 @@ COPY --chown=user src ./src
 COPY --chown=user pipelines ./pipelines
 COPY --chown=user config ./config
 COPY --chown=user .streamlit ./.streamlit
+# `pyproject.toml` names README.md as the project readme, so the build backend needs it
+# present for the install below — the image does not use it, but hatchling refuses
+# without it. Copied here rather than beside the lockfile so editing prose does not
+# invalidate the dependency layer.
+COPY --chown=user README.md ./
 RUN uv sync --locked --no-dev
 
 ENV PATH=/home/user/venv/bin:$PATH

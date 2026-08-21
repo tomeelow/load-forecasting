@@ -31,6 +31,11 @@ COPY src ./src
 COPY pipelines ./pipelines
 COPY config ./config
 COPY .streamlit ./.streamlit
+# `pyproject.toml` names README.md as the project readme, so the build backend needs it
+# present for the install below — the image does not use it, but hatchling refuses
+# without it. Copied here rather than beside the lockfile so editing prose does not
+# invalidate the dependency layer.
+COPY README.md ./
 RUN uv sync --locked --no-dev
 
 # Written to at runtime by the pipelines and read by both services. Declared here so the
