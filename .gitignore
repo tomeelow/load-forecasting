@@ -52,3 +52,6 @@ htmlcov/
 
 # Pipeline state (prediction log, run markers) — see ADR-008
 state/
+
+# Editor/agent scratch
+.claude/
