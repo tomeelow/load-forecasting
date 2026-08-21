@@ -16,7 +16,12 @@ dataset → leakage-safe features → tracked training → a gated promotion →
 drift monitoring → automated retraining, running daily on free infrastructure. LightGBM
 on engineered features is the easy part.
 
-<!-- BENCHMARK-HEADLINE -->
+> **TODO — headline figure.** The gate-closure-aligned benchmark
+> (`pipelines.audit`) is being computed over the most recent year. Until it lands, the
+> only figure this repository stands behind is the one in
+> [`reports/benchmark_h24.md`](reports/benchmark_h24.md), which uses the older
+> flat-24-hour comparison that [ADR-010](docs/ADR.md) explains is not like-for-like
+> against PSE. No number is quoted here rather than the flattering one.
 
 ---
 
@@ -81,7 +86,9 @@ the prediction log are carried between ephemeral runners on an orphan branch
 
 ## Benchmark results
 
-<!-- BENCHMARK-BODY -->
+**TODO.** Being recomputed — see the note above and
+[`docs/evaluation_notes.md`](docs/evaluation_notes.md) for what is being measured and
+why the previous figure was withdrawn.
 
 ---
 
