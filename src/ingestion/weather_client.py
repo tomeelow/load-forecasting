@@ -263,3 +263,70 @@ def fetch_national_forecast(
         national.index.max(),
     )
     return national
+
+
+def _lead_suffix(lead_days: int) -> str:
+    """Open-Meteo's suffix for "the value as it was forecast `lead_days` days earlier"."""
+    if lead_days < 1:
+        raise ValueError(f"lead_days must be at least 1, got {lead_days}")
+    return f"_previous_day{lead_days}"
+
+
+def fetch_city_day_ahead(
+    city: City, start_date: str, end_date: str, cfg: WeatherConfig
+) -> pd.DataFrame:
+    """The weather that *was forecast* for each past hour, at a fixed lead time.
+
+    Evaluation-only, and it exists to answer one question the archive cannot: how much
+    of the model's advantage over PSE is the model, and how much is having been handed
+    weather nobody had at forecast time. The archive endpoint returns what was later
+    observed; this returns what the forecast said a day earlier, which is what serving
+    actually gets.
+
+    Open-Meteo exposes it as a `_previous_dayN` suffix on each variable, so the response
+    carries our normal column set once the suffix is stripped.
+    """
+    if not cfg.historical_forecast_url:
+        raise ValueError("No historical_forecast_url configured; cannot fetch day-ahead weather")
+
+    suffix = _lead_suffix(cfg.historical_forecast_lead_days)
+    requested = tuple(f"{v}{suffix}" for v in cfg.variables)
+    frames = [
+        parse_hourly(
+            _get(
+                cfg.historical_forecast_url,
+                {
+                    "latitude": city.lat,
+                    "longitude": city.lon,
+                    "start_date": chunk_start,
+                    "end_date": chunk_end,
+                    "hourly": ",".join(requested),
+                    "wind_speed_unit": "ms",
+                    "timezone": "UTC",
+                },
+                cfg.request,
+            ),
+            requested,
+        ).rename(columns={v: COLUMN_NAMES[v.removesuffix(suffix)] for v in requested})
+        for chunk_start, chunk_end in date_chunks(start_date, end_date)
+    ]
+    if not frames:
+        raise ValueError(f"Day-ahead range ends before it starts: {start_date} to {end_date}")
+
+    combined = pd.concat(frames).sort_index()
+    return combined[~combined.index.duplicated(keep="last")]
+
+
+def fetch_national_day_ahead(cfg: WeatherConfig, start_date: str, end_date: str) -> pd.DataFrame:
+    """Population-weighted day-ahead *forecast* weather over a past range."""
+    frames = {c.name: fetch_city_day_ahead(c, start_date, end_date, cfg) for c in cfg.cities}
+    national = national_weather(frames, cfg.cities)
+    logger.info(
+        "Open-Meteo day-ahead archive (lead {}d): {} cities, {} hourly rows, {} to {}",
+        cfg.historical_forecast_lead_days,
+        len(frames),
+        len(national),
+        national.index.min(),
+        national.index.max(),
+    )
+    return national

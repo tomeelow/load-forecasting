@@ -100,12 +100,18 @@ def rolling_origin_splits(
     test_days: int,
     step_days: int,
     max_splits: int | None = None,
+    first_test_start: pd.Timestamp | None = None,
 ) -> list[Split]:
     """Expanding-window splits: the origin steps forward, training always starts at the top.
 
     Expanding rather than sliding, because more history is genuinely better here and a
     production retrain would use all of it. Each origin is a separate fit, so accumulated
     predictions across all splits are out-of-sample everywhere.
+
+    `first_test_start` moves the first origin without shrinking the training data behind
+    it. Left unset, coverage begins `initial_train_days` after the data does — which on a
+    long series means the *oldest* year is the one reported. Setting it is how the
+    coverage window becomes a choice rather than a side effect of where the data starts.
     """
     if len(index) == 0:
         raise ValueError("Cannot build splits from an empty index")
@@ -124,6 +130,14 @@ def rolling_origin_splits(
 
     splits: list[Split] = []
     train_end = start + pd.Timedelta(days=initial_train_days) - pd.Timedelta(hours=1)
+    if first_test_start is not None:
+        requested = pd.Timestamp(first_test_start) - embargo
+        if requested < train_end:
+            raise ValueError(
+                f"first_test_start {first_test_start} leaves less than "
+                f"{initial_train_days} training days after {start}"
+            )
+        train_end = requested
     while True:
         test_start = train_end + embargo
         test_end = min(test_start + test_span, last)
