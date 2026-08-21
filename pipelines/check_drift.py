@@ -21,8 +21,10 @@ import pandas as pd
 from loguru import logger
 
 from src.config import Config, load_config, load_project_env
+from src.features.builder import feature_columns, make_features
 from src.ingestion.dataset import read_dataset
-from src.monitoring.drift import DriftResult, check_drift
+from src.monitoring.drift import DriftResult, check_drift, monitored_columns
+from src.monitoring.history import DriftHistory
 from src.pipeline_state import PipelineState
 from src.prediction_log import PredictionLog
 
@@ -34,15 +36,21 @@ def run(
     *,
     log: PredictionLog | None = None,
     state: PipelineState | None = None,
+    history: DriftHistory | None = None,
     now: pd.Timestamp | None = None,
     write_report: bool = True,
 ) -> DriftResult:
     """Check for drift, and set the retrain flag if it is warranted."""
     log = log or PredictionLog(cfg.state.prediction_log_path)
     state = state or PipelineState(cfg.state.pipeline_state_path)
+    history = history or DriftHistory(cfg.state.drift_history_path)
 
     dataset = read_dataset(cfg.data.dataset_path)
     result = check_drift(cfg, dataset, log, now=now, write_report=write_report)
+
+    # Recorded before the flag is decided, so a run that finds nothing is a data point
+    # too — a trend of quiet nights is what makes a noisy one mean something.
+    history.append(result, monitored_features=_monitored_count(cfg, dataset))
 
     if result.should_retrain:
         state.raise_retrain_flag("; ".join(result.reasons))
@@ -51,6 +59,20 @@ def run(
 
     state.record_success(PIPELINE, now)
     return result
+
+
+def _monitored_count(cfg: Config, dataset: pd.DataFrame) -> int | None:
+    """How many inputs the share was taken over, so a share can be read back as a count."""
+    try:
+        features = make_features(
+            dataset,
+            cfg.model.horizons[0],
+            rolling_window=cfg.features.rolling_window_hours,
+            weekly_lag=cfg.features.weekly_lag_hours,
+        )
+    except ValueError:
+        return None
+    return len(monitored_columns(feature_columns(list(features.columns))))
 
 
 def main(argv: list[str] | None = None) -> int:

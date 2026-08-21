@@ -124,6 +124,10 @@ state:
   dir: state
   prediction_log: predictions.db
   pipeline_state: pipeline_state.json
+  # One row per drift check. The HTML report describes a single comparison; this is what
+  # makes the share readable as a trend, which is the only way it says anything on a
+  # target where input drift fires most nights. See ADR-009.
+  drift_history: drift_history.csv
 
 serving:
   # How many hourly forecasts one request may ask for, counted from local midnight.

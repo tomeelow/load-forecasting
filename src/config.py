@@ -203,10 +203,15 @@ class StateConfig:
     dir: Path
     prediction_log: str
     pipeline_state: str
+    drift_history: str = "drift_history.csv"
 
     @property
     def prediction_log_path(self) -> Path:
         return self.dir / self.prediction_log
+
+    @property
+    def drift_history_path(self) -> Path:
+        return self.dir / self.drift_history
 
     @property
     def pipeline_state_path(self) -> Path:
