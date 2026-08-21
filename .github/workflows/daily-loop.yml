@@ -73,6 +73,13 @@ jobs:
           uv run python -m pipelines.retrain_if_needed \
             ${{ inputs.force_retrain && '--force' || '' }}
 
+      # Last, so it forecasts with whatever champion this run leaves in place. Nothing
+      # downstream reads today's predictions — tomorrow's `evaluate` scores them once
+      # ENTSO-E publishes the actuals — but if this step never runs, the prediction log
+      # stays empty and production monitoring is permanently silent.
+      - name: Forecast the day ahead and log it
+        run: uv run python -m pipelines.forecast
+
       - name: Reclaim artifacts from pruned runs
         run: |
           uv run mlflow gc --backend-store-uri sqlite:///mlruns/mlflow.db || \
