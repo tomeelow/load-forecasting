@@ -179,18 +179,43 @@ def load_model_card(cfg: Config) -> ModelCard:
         synthetic=None if synthetic is None else synthetic == "true",
         metrics=dict(run.data.metrics),
         params=dict(run.data.params),
-        importance=_load_importance(run.info.artifact_uri),
+        importance=_load_importance(run.info.artifact_uri, version.run_id, cfg.mlflow.tracking_uri),
     )
 
 
-def _load_importance(artifact_uri: str) -> pd.DataFrame:
-    """Feature importance as logged by the training run, or an empty frame."""
-    path = Path(artifact_uri.removeprefix("file://")) / "feature_importance.json"
-    if not path.exists():
-        logger.debug("No feature importance artifact at {}", path)
-        return pd.DataFrame(columns=["feature", "gain", "split"])
-    payload = json.loads(path.read_text())
-    return pd.DataFrame(payload["data"], columns=payload["columns"])
+IMPORTANCE_ARTIFACT = "feature_importance.json"
+EMPTY_IMPORTANCE = ("feature", "gain", "split")
+
+
+def _load_importance(artifact_uri: str, run_id: str, tracking_uri: str) -> pd.DataFrame:
+    """Feature importance as logged by the training run, or an empty frame.
+
+    Tries the recorded artifact URI first, then looks the run up inside the local store.
+    The fallback is what makes the hosted mirror work: MLflow records an **absolute**
+    artifact path, so a store copied off a CI runner points every run at
+    `/home/runner/work/...`, which does not exist here. The artifacts travelled with the
+    database — only the path did not — so finding them by run id recovers them.
+    """
+    candidates = [Path(artifact_uri.removeprefix("file://")) / IMPORTANCE_ARTIFACT]
+    root = _store_root(tracking_uri)
+    if root is not None:
+        candidates += sorted(root.glob(f"*/{run_id}/artifacts/{IMPORTANCE_ARTIFACT}"))
+
+    for path in candidates:
+        if path.exists():
+            payload = json.loads(path.read_text())
+            return pd.DataFrame(payload["data"], columns=payload["columns"])
+
+    logger.debug("No feature importance artifact for run {}", run_id)
+    return pd.DataFrame(columns=list(EMPTY_IMPORTANCE))
+
+
+def _store_root(tracking_uri: str) -> Path | None:
+    """The directory a local SQLite tracking store keeps its artifacts beside."""
+    if not tracking_uri.startswith("sqlite:///"):
+        return None
+    database = Path(tracking_uri.removeprefix("sqlite:///"))
+    return database.parent if database.parent.exists() else None
 
 
 def load_recent_actuals(cfg: Config, days: int = 14) -> pd.DataFrame:

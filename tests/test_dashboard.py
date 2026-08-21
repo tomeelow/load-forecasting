@@ -379,3 +379,56 @@ class TestFiguresOnThinData:
         figure = forecast_figure(pd.DataFrame(), served, "Europe/Warsaw")
 
         assert {trace.name for trace in figure.data} == {"Model forecast"}
+
+
+class TestMirroredArtifacts:
+    """MLflow records absolute artifact paths, which a copied store cannot honour.
+
+    The hosted dashboard reads a store lifted off a CI runner, so every run points at
+    `/home/runner/work/...`. The artifacts travelled with the database; only the path
+    did not. Losing them silently would leave the importance panel permanently empty on
+    the deployed page and nowhere else — the failure mode nobody sees locally.
+    """
+
+    @staticmethod
+    def write_artifact(root, experiment: str, run_id: str) -> None:
+        artifacts = root / experiment / run_id / "artifacts"
+        artifacts.mkdir(parents=True)
+        (artifacts / "feature_importance.json").write_text(
+            '{"columns": ["feature", "gain", "split"], "data": [["load_lag_168", 3.4e12, 5045]]}'
+        )
+
+    def test_an_artifact_is_found_by_run_id_when_the_recorded_path_is_gone(self, tmp_path):
+        store = tmp_path / "mlruns"
+        self.write_artifact(store, "1", "abc123")
+
+        importance = data._load_importance(
+            "file:///home/runner/work/load-forecasting/mlruns/1/abc123/artifacts",
+            "abc123",
+            f"sqlite:///{store}/mlflow.db",
+        )
+
+        assert list(importance["feature"]) == ["load_lag_168"]
+
+    def test_the_recorded_path_is_still_preferred_when_it_exists(self, tmp_path):
+        store = tmp_path / "mlruns"
+        self.write_artifact(store, "1", "abc123")
+
+        importance = data._load_importance(
+            str(store / "1" / "abc123" / "artifacts"), "abc123", f"sqlite:///{store}/mlflow.db"
+        )
+
+        assert len(importance) == 1
+
+    def test_a_genuinely_missing_artifact_is_an_empty_frame_not_an_error(self, tmp_path):
+        importance = data._load_importance(
+            "file:///gone", "nosuchrun", f"sqlite:///{tmp_path}/mlruns/mlflow.db"
+        )
+
+        assert importance.empty
+        assert list(importance.columns) == list(data.EMPTY_IMPORTANCE)
+
+    def test_a_remote_tracking_uri_has_no_local_store_to_search(self):
+        importance = data._load_importance("file:///gone", "abc123", "http://mlflow:5000")
+
+        assert importance.empty
