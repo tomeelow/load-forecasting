@@ -1,0 +1,58 @@
+name: ci
+
+# Lint and test on every change. Separate from `daily-loop.yml` because they answer
+# different questions: this one asks whether the code is correct, that one asks what the
+# world did overnight. The daily loop needs a secret and the network; this deliberately
+# has neither, which is the point — `tests/conftest.py` blocks HTTP and hides `.env`, so a
+# test that quietly depends on a token or a live API fails here rather than on a laptop
+# that happens to have both.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Test
+        # No ENTSOE_API_KEY is set on purpose. The suite must pass without one.
+        run: uv run pytest
+
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: The Compose file is valid and the image builds
+        # A stack that only builds on the author's machine is the most common way a
+        # portfolio repository wastes a reviewer's afternoon.
+        run: |
+          docker compose config --quiet
+          docker compose build api

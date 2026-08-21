@@ -24,25 +24,42 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.config import Config, load_config
+from src.config import REPO_ROOT, Config, load_config
 from src.dashboard import data
+from src.dashboard.state_sync import MirrorResult, mirror_state
 from src.models.baselines import NAIVE_SEASONAL, TSO_FORECAST
 
 TITLE = "Day-ahead load forecast — Polish bidding zone"
 ADR_009 = (
-    "https://github.com/ivantomilo/load-forecasting/blob/main/docs/ADR.md"
+    "https://github.com/tomeelow/load-forecasting/blob/main/docs/ADR.md"
     "#adr-009--drift-is-measured-against-the-same-weeks-in-previous-years"
 )
 
+TEMPLATE = "plotly_white"
 MODEL_COLOUR = "#2563eb"
 PSE_COLOUR = "#f97316"
 ACTUAL_COLOUR = "#111827"
 BAND_COLOUR = "rgba(37, 99, 235, 0.18)"
 
 
+@st.cache_resource(ttl=3600)
+def _mirror() -> MirrorResult:
+    """Pull the pipeline's state once an hour where there is no pipeline (see state_sync).
+
+    A resource rather than data, because it writes to disk and every loader below reads
+    what it wrote — running it twice concurrently would have them read a half-copied tree.
+    Local runs return immediately with `enabled=False`.
+    """
+    return mirror_state(REPO_ROOT)
+
+
 @st.cache_data(ttl=300)
-def _cached(loader: str, **kwargs):
-    """Re-read artifacts every five minutes; the loop writes them at most once a day."""
+def _cached(loader: str, _mirrored_at=None, **kwargs):
+    """Re-read artifacts every five minutes; the loop writes them at most once a day.
+
+    `_mirrored_at` is part of the cache key and nothing else: a fresh mirror must not be
+    read through a cache populated from the previous snapshot.
+    """
     cfg = load_config()
     return getattr(data, loader)(cfg, **kwargs)
 
@@ -51,12 +68,22 @@ def main() -> None:
     st.set_page_config(page_title=TITLE, page_icon="⚡", layout="wide")
     cfg = load_config()
 
+    mirror = _mirror()
     st.title(TITLE)
     st.caption(
         "Hourly day-ahead forecasts of total Polish electricity demand, benchmarked "
         "against PSE's own published forecast. Every panel below is read from the "
-        "artifacts the daily pipeline writes."
+        "artifacts the daily pipeline writes. " + mirror.describe()
     )
+    if mirror.enabled:
+        st.info(
+            "This is a **hosted mirror**, not a live service. It shows what the daily "
+            "GitHub Actions loop recorded — the dataset, the registry, the prediction log "
+            "and the drift history — refreshed hourly from the state branch. It does not "
+            "serve fresh forecasts, because that needs a live weather call and a model in "
+            "memory; run the stack locally with `docker compose up` for that.",
+            icon="ℹ️",
+        )
 
     card = _cached("load_model_card")
     _synthetic_warning(card)
@@ -132,6 +159,7 @@ def forecast_panel(cfg: Config, card: data.ModelCard) -> None:
         _add_forecast_band(figure, served, cfg)
 
     figure.update_layout(
+        template=TEMPLATE,
         height=420,
         margin={"l": 10, "r": 10, "t": 30, "b": 10},
         yaxis_title="MW",
@@ -225,6 +253,7 @@ def _backtest_error(cfg: Config, backtest: data.BacktestEvidence) -> None:
         )
     )
     figure.update_layout(
+        template=TEMPLATE,
         height=320,
         margin={"l": 10, "r": 10, "t": 30, "b": 10},
         yaxis_title="30-day rolling MAPE (%)",
@@ -347,6 +376,7 @@ def drift_panel(cfg: Config) -> None:
         annotation_position="top left",
     )
     figure.update_layout(
+        template=TEMPLATE,
         height=300,
         margin={"l": 10, "r": 10, "t": 30, "b": 10},
         yaxis_title="share of monitored inputs drifting",
@@ -393,6 +423,7 @@ def importance_panel(card: data.ModelCard) -> None:
         go.Bar(x=top["gain"], y=top["feature"], orientation="h", marker_color=MODEL_COLOUR)
     )
     figure.update_layout(
+        template=TEMPLATE,
         height=380,
         margin={"l": 10, "r": 10, "t": 20, "b": 10},
         xaxis_title="total gain",
@@ -433,9 +464,11 @@ def model_card_panel(card: data.ModelCard) -> None:
         "Features": card.params.get("n_features"),
         "Boosting rounds used": card.params.get("best_iteration"),
     }
-    st.dataframe(
-        pd.DataFrame({"": {k: v for k, v in rows.items() if v}}),
-        use_container_width=True,
+    st.markdown(
+        "\n".join(
+            ["| | |", "|---|---|"]
+            + [f"| {name} | `{value}` |" for name, value in rows.items() if value]
+        )
     )
     st.caption(
         "Holdout metrics recorded at promotion time: "

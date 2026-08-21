@@ -1,0 +1,120 @@
+# The local production-like stack: a real MLflow server on Postgres, the forecast API,
+# and the dashboard. `docker compose up` is the whole setup.
+#
+# The registry starts empty. Nothing here trains a model, because training is a pipeline
+# run rather than a service — `docker compose run --rm trainer` does it, and until then
+# the API answers /health with 503 and the dashboard says which model it cannot find.
+# That is the honest first-run state and it is worth seeing rather than hiding behind a
+# container that fails to boot.
+
+name: pl-load-forecasting
+
+services:
+  mlflow-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    volumes:
+      - mlflow_pg:/var/lib/postgresql/data
+    healthcheck:
+      # MLflow's first action is a schema migration, so it must not start against a
+      # Postgres that is still initialising.
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.15.1
+    command: >
+      sh -c "pip install --no-cache-dir psycopg2-binary==2.9.10 &&
+             mlflow server --host 0.0.0.0 --port 5000
+             --backend-store-uri postgresql://mlflow:mlflow@mlflow-db/mlflow
+             --artifacts-destination /mlartifacts
+             --serve-artifacts"
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_artifacts:/mlartifacts
+    depends_on:
+      mlflow-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      ENTSOE_API_KEY: ${ENTSOE_API_KEY:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      # The dataset and the prediction log are shared with the dashboard and the trainer:
+      # all three are looking at one system, not three copies of one.
+      - ./data:/app/data
+      - ./state:/app/state
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      # /health returns 503 until a champion is registered, which is the correct answer
+      # and not a reason to restart the container — so the check accepts either.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null -w '%{http_code}' http://localhost:8000/health | grep -qE '200|503'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command:
+      ["streamlit", "run", "src/dashboard/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./state:/app/state
+      - ./reports:/app/reports
+      - ./monitoring:/app/monitoring
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+  # Not a service — a one-shot runner for the pipelines, so the same image that serves is
+  # the image that trains. `docker compose run --rm trainer python -m pipelines.train`
+  # populates the registry the other two read from.
+  trainer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    profiles: ["tools"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      ENTSOE_API_KEY: ${ENTSOE_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./state:/app/state
+      - ./reports:/app/reports
+      - ./monitoring:/app/monitoring
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    command: ["python", "-m", "pipelines.train"]
+
+volumes:
+  mlflow_pg:
+  mlflow_artifacts:

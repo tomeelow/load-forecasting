@@ -7,6 +7,7 @@ project needs. What lives here is where that token is *found*.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -252,14 +253,23 @@ SQLITE_PREFIX = "sqlite:///"
 
 
 def _resolve_tracking_uri(uri: str) -> str:
-    """Anchor a relative SQLite tracking URI to the repository root.
+    """The tracking store: the environment's if it named one, otherwise the config's.
 
-    `sqlite:///mlruns/mlflow.db` is relative to the *working directory*, so the same
-    command run from a subdirectory silently creates a second, empty store — a fresh
-    registry with no champion in it, and a training run that promotes itself against
-    nothing. Every other configured path is resolved against the repo root; this one
-    was the exception, which is how a stray mlflow.db came to sit in the project root.
+    `MLFLOW_TRACKING_URI` wins because the Compose stack runs a real MLflow server and
+    the containers must reach it over the network, while a laptop uses the SQLite file
+    in the repository. That is a deployment fact, not a pipeline parameter, so it belongs
+    in the environment rather than in `config.yaml` — and MLflow itself already reads
+    that variable, so honouring it here keeps our explicit `set_tracking_uri` from
+    silently overriding what the operator asked for.
+
+    A relative SQLite URI is anchored to the repository root. `sqlite:///mlruns/mlflow.db`
+    is relative to the *working directory*, so the same command run from a subdirectory
+    silently creates a second, empty store — a fresh registry with no champion in it, and
+    a training run that promotes itself against nothing. Every other configured path is
+    resolved against the repo root; this one was the exception, which is how a stray
+    mlflow.db came to sit in the project root.
     """
+    uri = os.environ.get("MLFLOW_TRACKING_URI") or uri
     if not uri.startswith(SQLITE_PREFIX):
         return uri
     return f"{SQLITE_PREFIX}{_resolve(uri.removeprefix(SQLITE_PREFIX))}"

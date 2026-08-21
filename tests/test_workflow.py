@@ -66,9 +66,11 @@ def test_two_runs_cannot_race_on_the_state_branch():
     assert concurrency["cancel-in-progress"] is False
 
 
-def test_the_workflow_writes_to_the_same_mlflow_store_the_code_reads():
+def test_the_workflow_writes_to_the_same_mlflow_store_the_code_reads(monkeypatch):
+    """The scheduled loop sets no `MLFLOW_TRACKING_URI`, so it gets the configured store."""
     from src.config import load_config
 
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     configured = load_config().mlflow.tracking_uri.rsplit("/", 2)[-2:]
 
     assert "/".join(configured) == "mlruns/mlflow.db"

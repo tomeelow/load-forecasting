@@ -152,9 +152,7 @@ class Origins:
         return self.step_days * self.max_splits
 
 
-def _flat_variant(
-    cfg: Config, frame: pd.DataFrame, horizon: int, origins: Origins
-) -> Variant:
+def _flat_variant(cfg: Config, frame: pd.DataFrame, horizon: int, origins: Origins) -> Variant:
     """The published methodology, re-run on the audit's window and origins."""
     result = run_backtest(
         frame,

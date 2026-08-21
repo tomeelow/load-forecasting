@@ -1,0 +1,24 @@
+# Everything the image does not need. Keeping the build context small is most of what
+# makes a rebuild fast, and the state directories below are mounted at runtime rather
+# than baked in — a dataset copied into a layer is a dataset that starts ageing.
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+.claude
+__pycache__
+*.pyc
+data
+state
+mlruns
+mlartifacts
+monitoring
+reports
+notebooks
+tests
+docs
+deploy
+.env
+.env.*
+!.env.example
