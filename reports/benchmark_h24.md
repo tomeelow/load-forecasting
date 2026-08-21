@@ -1,5 +1,14 @@
 # Benchmark — 24-hour ahead
 
+> **Superseded as the reported figure.** This is a *flat 24-hour* comparison over 2021 —
+> the oldest year the data supports, and not the product PSE publishes. The reportable
+> benchmark is `reports/audit_h24.md`, which scores each hour at PSE's own lead time, on
+> the weather that was forecast a day ahead, over the most recent year. Against that, the
+> model does **not** beat PSE. See `docs/evaluation_notes.md` for what changed and why.
+>
+> This file is kept because it is a real measurement of a real year, not because it is
+> the one to quote.
+
 Rolling-origin backtest: 26 origins, 8709 out-of-sample hours covering 364 days (2021-01-08 to 2022-01-07). Dataset `65a36efba487`.
 
 | Model | MAPE | RMSE (MW) | MAE (MW) | Bias (MW) | vs PSE forecast |

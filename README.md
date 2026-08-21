@@ -16,12 +16,16 @@ dataset → leakage-safe features → tracked training → a gated promotion →
 drift monitoring → automated retraining, running daily on free infrastructure. LightGBM
 on engineered features is the easy part.
 
-> **TODO — headline figure.** The gate-closure-aligned benchmark
-> (`pipelines.audit`) is being computed over the most recent year. Until it lands, the
-> only figure this repository stands behind is the one in
-> [`reports/benchmark_h24.md`](reports/benchmark_h24.md), which uses the older
-> flat-24-hour comparison that [ADR-010](docs/ADR.md) explains is not like-for-like
-> against PSE. No number is quoted here rather than the flattering one.
+**Result, honestly:** over the most recent year the model does **not** beat PSE. Scored
+at PSE's own lead time and on the weather that was actually forecast a day ahead, it
+reaches **2.64% MAPE against PSE's 2.35%** across 8,736 out-of-sample hours — 12% *more*
+error, not less. It beats PSE in spring and summer and loses in autumn, winter and on
+holidays.
+
+An earlier version of this README claimed a 0.71 pp win. That number came from the oldest
+year in the data, a horizon that did not match PSE's, and weather nobody had at forecast
+time. [The audit that found it](docs/evaluation_notes.md) is the most useful document
+here.
 
 ---
 
@@ -86,9 +90,92 @@ the prediction log are carried between ephemeral runners on an orphan branch
 
 ## Benchmark results
 
-**TODO.** Being recomputed — see the note above and
-[`docs/evaluation_notes.md`](docs/evaluation_notes.md) for what is being measured and
-why the previous figure was withdrawn.
+**8,736 matched out-of-sample hours, 2025-08-21 → 2026-08-19**, 13 expanding-window
+origins, a 24-hour embargo between each training block and the block it predicts, and
+every model scored on identical timestamps. Produced by `uv run python -m pipelines.audit`
+and written to [`reports/audit_h24.md`](reports/audit_h24.md).
+
+Three variants, each removing one advantage the previously reported figure enjoyed:
+
+| Variant | Model MAPE | PSE MAPE | Gap | Model RMSE | PSE RMSE |
+|---|---|---|---|---|---|
+| **A.** flat 24 h horizon, observed weather | 2.364% | 2.351% | +0.013 pp | 603 MW | 566 MW |
+| **B.** gate-closure horizons, observed weather | 2.576% | 2.351% | +0.225 pp | 640 MW | 566 MW |
+| **C.** gate-closure horizons, day-ahead forecast weather | **2.642%** | **2.351%** | **+0.291 pp** | 670 MW | 566 MW |
+
+Naive seasonal (`load[T−168]`) over the same hours: **5.763%**. Both forecasts beat it by
+a wide margin; that was never the interesting question.
+
+**C is the reportable number.** A is the methodology this README used to publish, and the
+distance between them is what the audit was for: making the horizon like-for-like costs
+0.212 pp, using forecast rather than observed weather costs a further 0.066 pp, and
+together that is more than the entire margin A appeared to show.
+
+### Evaluation conditions
+
+Stated explicitly, because a benchmark number without them is not checkable:
+
+| | |
+|---|---|
+| **Period** | 2025-08-21 → 2026-08-19 (364 days, the most recent full year) |
+| **Hours scored** | 8,736, identical for the model, PSE and the naive baseline |
+| **Horizon** | per hour, matched to PSE's publication deadline: 14 h for 00:00 local, rising to 37 h for 23:00 |
+| **Weather** | what Open-Meteo forecast one day ahead — not what was later observed |
+| **Splits** | 13 expanding-window origins, 28-day test blocks, 24-hour embargo ([ADR-006](docs/ADR.md)) |
+| **Tuning** | none; LightGBM defaults. Worth ~0.036 pp on the 2021 backtest, so a tuned model would still lose |
+
+![30-day rolling MAPE, this model against PSE's day-ahead forecast, over the audited year](docs/images/rolling_error_vs_pse.png)
+
+The seasonal structure is the result, and it is invisible in the annual average. The
+model (blue) runs well above PSE through the autumn and winter — peaking at 4.4% against
+PSE's 2.5% in the January cold — trades places through spring, and is clearly better
+through July and August, where PSE degrades to 3.5% and the model holds near 2.6%.
+
+### Where it wins and where it loses
+
+| Segment | Hours | Model | PSE | Gap | |
+|---|---|---|---|---|---|
+| Christmas–New Year | 216 | 4.216% | 3.036% | +1.180 pp | PSE |
+| Winter | 2160 | 3.132% | 2.121% | +1.010 pp | PSE |
+| Holidays | 336 | 4.134% | 3.513% | +0.621 pp | PSE |
+| Autumn | 2185 | 2.446% | 1.888% | +0.558 pp | PSE |
+| Weekdays | 6240 | 2.635% | 2.270% | +0.366 pp | PSE |
+| Off-peak hours | 3276 | 2.383% | 2.032% | +0.350 pp | PSE |
+| Peak hours | 5460 | 2.797% | 2.542% | +0.255 pp | PSE |
+| Weekends | 2496 | 2.657% | 2.555% | +0.102 pp | PSE |
+| **Spring** | 2207 | 2.336% | 2.473% | **−0.137 pp** | **model** |
+| **Summer** | 2184 | 2.662% | 2.918% | **−0.256 pp** | **model** |
+
+The seasonal split is the story. Mild weather is where a temperature-driven gradient
+booster does well; winter — heating demand, daylight, and holidays interacting — is where
+PSE's operational knowledge shows. Christmas–New Year is the worst segment in the
+repository and has been in every evaluation run against it.
+
+### The most interesting thing the audit found
+
+Not the aggregate. **This model degrades with lead time and PSE does not.**
+
+| Local hour | Lead | Model | PSE | Gap |
+|---|---|---|---|---|
+| 09:00 | 23 h | 2.887% | 2.960% | **−0.073 pp** |
+| 11:00 | 25 h | 3.171% | 3.220% | **−0.050 pp** |
+| 19:00 | 33 h | 2.518% | 1.916% | +0.602 pp |
+| 23:00 | 37 h | 2.828% | 2.006% | **+0.821 pp** |
+
+The correlation between the gap and the lead time is **+0.65**. The model is level with
+PSE at 23–25 hours — the only place it wins — and loses by 0.82 pp at 37 hours. It leans
+on recent load (`load_lag_168` and `load_lag_24` dominate its feature importance), and at
+a 37-hour horizon the useful lags are gone. PSE evidently has structural information —
+planned outages, industrial schedules, its own load research — that does not decay with
+lead time.
+
+PSE's own error, meanwhile, tracks the *hour* rather than the lead: worst at midday
+(3.2%), best in the late evening (1.9%) despite that being the longest lead it faces.
+
+The older flat-horizon backtest over 2021 is kept at
+[`reports/benchmark_h24.md`](reports/benchmark_h24.md) as a labelled historical
+measurement. It reports 1.947% against PSE's 2.658%; roughly half of that difference is
+that PSE's forecast has since improved, and the rest is the two corrections above.
 
 ---
 
@@ -137,7 +224,20 @@ the backtest, with nothing in the logs to say why.
 This repository used to state that honestly and leave it unquantified. It is now
 measured: the audit re-runs the whole backtest with the weather features replaced by
 **what Open-Meteo actually forecast a day ahead** of each hour, from its archive of past
-forecast runs. <!-- WEATHER-SKEW -->
+forecast runs.
+
+**The skew is worth 0.066 pp of MAPE** (2.576% → 2.642%). For scale, weather features are
+worth about 0.175 pp in total, so serving on forecast weather gives back roughly 38% of
+everything the weather buys. The old README bounded the penalty inside that 0.175 pp gap
+and said it could not be larger; the bound held, and the measured value sits in the upper
+half of it.
+
+Two caveats on the measurement. Only **temperature** is swapped — Open-Meteo's forecast
+archive carries wind and cloud only from 2024-01, and swapping those too would have left
+the audited variant with a fraction of the training history the others had, turning a
+weather measurement into a training-size one. And the archive's day-ahead vintage is not
+identical to the exact run PSE's forecasters saw. It is a lower bound, and it is stated
+as one.
 
 ### Seasonality is not drift
 
@@ -352,6 +452,13 @@ the same function that draws the dashboard, so the image cannot drift away from 
 
 Every real system has rough edges. These are this one's.
 
+**The model does not beat the benchmark it was built to beat.** Over a recent year, at
+PSE's own lead time and on forecast weather, it is 0.29 pp behind. It wins in spring and
+summer and loses in autumn, winter and on holidays. That is a real result — a LightGBM
+model on free public data landing within 0.3 pp of a national TSO's operational forecast
+is not nothing — but it is not the result this README used to claim, and the difference
+was two evaluation choices rather than any change to the model.
+
 **Input drift fires on most nights, so the loop attempts a retrain most nights.** The
 cause is the shape of the comparison rather than the season — a fortnight against a
 three-year reference is narrow against wide — and a seasonal reference window cannot fix
@@ -404,22 +511,26 @@ horizon-parametrised throughout, but only `[24]` has ever been trained and serve
 
 ## What I'd do with more time
 
-**Score the gate on a shared block.** The limitation above is the most consequential
-thing wrong with the system: the safeguard that protects production is comparing two
-numbers measured on different weather. Holding out one common evaluation block and
-scoring both champion and candidate on it would make the gate mean what it claims to.
+**Train for the horizon the product actually needs.** The audit's most useful finding is
+that this model degrades with lead time and PSE's does not — level at 23 hours, 0.82 pp
+behind at 37. The served model is trained once at 24 hours and then asked to stretch
+across a delivery day whose lead times run from 14 to 37. A direct model per horizon,
+with a feature set chosen for that horizon rather than inherited from H=24, is the change
+most likely to close the gap, and the gate-closure evaluation already exists to measure
+whether it did.
 
-**Fix the holiday and Christmas–New Year regime.** The model's worst segment by a wide
-margin is the week between Christmas and New Year, where PSE's human forecasters beat it
-comfortably. A holiday flag is not enough — that week behaves like neither a weekday nor
-a weekend nor a normal holiday, and there are only a handful of them in the training
-data. A "days from nearest holiday" feature and explicit bridge-day handling are the
-obvious first attempts.
+**Fix the holiday and Christmas–New Year regime.** The worst segment in the repository:
+4.22% against PSE's 3.04% across 216 hours, and winter as a whole is 1.01 pp behind. A
+holiday flag is not enough — that week behaves like neither a weekday nor a weekend nor a
+normal holiday, and there are only a handful of them in the training data. "Days from
+nearest holiday", explicit bridge-day handling, and separating heating-degree-days from
+raw temperature are the obvious first attempts, and winter is where the annual average is
+being lost.
 
-**Calibrate the intervals.** The P10–P90 band comes from three independent quantile
-models, and nothing checks that 80% of actuals actually land inside it. Conformal
-prediction on the residuals would produce a band with a coverage guarantee instead of a
-band with a plausible shape, and pinball loss alone does not reveal the difference.
+**Score the gate on a shared block.** The safeguard that protects production compares two
+MAPEs measured on different 60-day windows, so a rough-weather month reads as model
+regression. Holding out one common evaluation block and scoring both champion and
+candidate on it would make the gate mean what it claims to.
 
 ---
 

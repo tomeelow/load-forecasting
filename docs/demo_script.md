@@ -30,18 +30,22 @@ a P10–P90 band. The dotted line is the grid operator's own forecast.*
 
 **Screen:** scroll to *Model error vs PSE error*. Both panels visible at once.
 
-**What to do:** pause on the rolling-MAPE chart with the two lines separated, then move
-right so the "accumulating" served panel is clearly in frame beside it.
+**What to do:** pause on the rolling-MAPE chart with both lines in frame, then move right
+so the "accumulating" served panel is clearly visible beside it.
 
-**What it shows:** the model's 30-day rolling error tracking below PSE's across a full
-year of out-of-sample hours — and, next to it, the served-prediction panel saying plainly
-how many hours it has scored and how many it needs. Two panels rather than one is the
-whole point: the backtest has a year, production has days, and they are not averaged
-together.
+**What it shows:** the model's 30-day rolling error against PSE's across a full year of
+out-of-sample hours, at PSE's own lead time and on forecast weather — the two lines cross
+seasonally, with the model ahead through spring and summer and behind in winter. Next to
+it, the served-prediction panel says plainly how many hours it has scored and how many it
+needs. Two panels rather than one is the point: the backtest has a year, production has
+days, and they are not averaged together.
 
-**Caption:** *Benchmarked against the operator's own forecast on identical hours and at
-the operator's own lead time. Production monitoring is shown separately, and says so
-until it has enough data.*
+**Do not skip this because the model loses on the annual average.** A candidate who shows
+the chart where they lose, and can say exactly why (lead-time decay, winter demand), is
+making a better impression than one showing a win nobody can check.
+
+**Caption:** *2.64% MAPE against the operator's own 2.35%, on identical hours at the
+operator's own lead time. The model wins in spring and summer and loses in winter.*
 
 ---
 
