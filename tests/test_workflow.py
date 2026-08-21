@@ -16,12 +16,14 @@ from src.config import REPO_ROOT
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "daily-loop.yml"
 
 # The order matters: nothing can be scored before the actuals are pulled, drift cannot
-# be judged before the served predictions are scored, and retraining answers drift.
+# be judged before the served predictions are scored, retraining answers drift, and the
+# forecast goes last so it is made with whatever champion the run leaves in place.
 CHAIN = [
     "pipelines.ingest",
     "pipelines.evaluate",
     "pipelines.check_drift",
     "pipelines.retrain_if_needed",
+    "pipelines.forecast",
 ]
 
 
@@ -34,7 +36,7 @@ def steps() -> list[dict]:
     return workflow()["jobs"]["loop"]["steps"]
 
 
-def test_the_loop_runs_ingest_then_evaluate_then_drift_then_retrain():
+def test_the_loop_runs_ingest_then_evaluate_then_drift_then_retrain_then_forecast():
     commands = [step.get("run", "") for step in steps()]
     positions = [
         next(i for i, command in enumerate(commands) if pipeline in command) for pipeline in CHAIN
@@ -71,3 +73,18 @@ def test_the_workflow_writes_to_the_same_mlflow_store_the_code_reads():
 
     assert "/".join(configured) == "mlruns/mlflow.db"
     assert "sqlite:///mlruns/mlflow.db" in WORKFLOW.read_text(), "mlflow gc must reclaim from it"
+
+
+def test_the_loop_forecasts_so_the_prediction_log_is_never_empty():
+    """Without this step nothing ever serves, and Phase 8 measures an empty table."""
+    commands = [step.get("run", "") for step in steps()]
+
+    assert any("pipelines.forecast" in command for command in commands)
+
+
+def test_the_forecast_runs_after_the_gate_so_it_uses_the_promoted_champion():
+    commands = [step.get("run", "") for step in steps()]
+    retrain = next(i for i, c in enumerate(commands) if "pipelines.retrain_if_needed" in c)
+    forecast = next(i for i, c in enumerate(commands) if "pipelines.forecast" in c)
+
+    assert forecast > retrain
