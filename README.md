@@ -269,9 +269,13 @@ champion holding **2.11%** on the same metric. It was logged to MLflow with its 
 metrics and dataset fingerprint — and left there. The `@champion` alias did not move.
 
 ```
-Retrain: TRAINED_NOT_PROMOTED — drift flag raised
-  gate: candidate 2.308 regresses past the champion's 2.115
+Retrain: TRAINED_NOT_PROMOTED — drift flag raised at 2026-08-20 14:30
+  gate: HOLD: candidate 2.3075 regresses past the champion's tolerance
+        2.1572 (= 2.1149 x 1.02)
 ```
+
+The 2% tolerance (`promotion.max_regression`) is what stops noise freezing the champion
+in place; 2.3075 is outside it, so the alias stayed where it was.
 
 Unattended retraining that can silently make production worse is worse than no
 unattended retraining. This is also a limitation, not only a triumph — see below.
