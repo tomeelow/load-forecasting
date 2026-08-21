@@ -21,11 +21,16 @@ Two rules the layout exists to enforce:
 from __future__ import annotations
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import REPO_ROOT, Config, load_config
 from src.dashboard import data
+from src.dashboard.figures import (
+    drift_figure,
+    forecast_figure,
+    importance_figure,
+    rolling_error_figure,
+)
 from src.dashboard.state_sync import MirrorResult, mirror_state
 from src.models.baselines import NAIVE_SEASONAL, TSO_FORECAST
 
@@ -34,12 +39,6 @@ ADR_009 = (
     "https://github.com/tomeelow/load-forecasting/blob/main/docs/ADR.md"
     "#adr-009--drift-is-measured-against-the-same-weeks-in-previous-years"
 )
-
-TEMPLATE = "plotly_white"
-MODEL_COLOUR = "#2563eb"
-PSE_COLOUR = "#f97316"
-ACTUAL_COLOUR = "#111827"
-BAND_COLOUR = "rgba(37, 99, 235, 0.18)"
 
 
 @st.cache_resource(ttl=3600)
@@ -129,45 +128,15 @@ def forecast_panel(cfg: Config, card: data.ModelCard) -> None:
         )
         return
 
-    figure = go.Figure()
-    if not actuals.empty:
-        local = actuals.index.tz_convert(cfg.data.timezone_local)
-        figure.add_trace(
-            go.Scatter(
-                x=local,
-                y=actuals[data.ACTUAL_COLUMN],
-                name="Actual load",
-                line={"color": ACTUAL_COLOUR, "width": 2},
-            )
-        )
-        if data.TSO_COLUMN in actuals.columns:
-            figure.add_trace(
-                go.Scatter(
-                    x=local,
-                    y=actuals[data.TSO_COLUMN],
-                    name="PSE day-ahead",
-                    line={"color": PSE_COLOUR, "width": 1.5, "dash": "dot"},
-                )
-            )
-
     if served.empty:
         st.caption(
             "No served forecast logged yet — the chart shows actuals and PSE's forecast "
             "only. The daily loop's `forecast` step fills this in."
         )
-    else:
-        _add_forecast_band(figure, served, cfg)
 
-    figure.update_layout(
-        template=TEMPLATE,
-        height=420,
-        margin={"l": 10, "r": 10, "t": 30, "b": 10},
-        yaxis_title="MW",
-        xaxis_title=f"local time ({cfg.data.timezone_local})",
-        hovermode="x unified",
-        legend={"orientation": "h", "y": 1.12, "x": 0},
+    st.plotly_chart(
+        forecast_figure(actuals, served, cfg.data.timezone_local), use_container_width=True
     )
-    st.plotly_chart(figure, use_container_width=True)
 
     if not served.empty and card.available:
         st.caption(
@@ -175,35 +144,6 @@ def forecast_panel(cfg: Config, card: data.ModelCard) -> None:
             f"{card.horizon}-hour horizon. The band is the model's own P10–P90 quantile "
             "forecast, not a confidence interval around the point estimate."
         )
-
-
-def _add_forecast_band(figure: go.Figure, served: pd.DataFrame, cfg: Config) -> None:
-    """The P10–P90 band, drawn as a filled region under the point forecast."""
-    local = served.index.tz_convert(cfg.data.timezone_local)
-    has_band = served[["p10", "p90"]].notna().all(axis=None)
-
-    if has_band:
-        figure.add_trace(
-            go.Scatter(x=local, y=served["p90"], line={"width": 0}, showlegend=False, name="P90")
-        )
-        figure.add_trace(
-            go.Scatter(
-                x=local,
-                y=served["p10"],
-                fill="tonexty",
-                fillcolor=BAND_COLOUR,
-                line={"width": 0},
-                name="P10–P90",
-            )
-        )
-    figure.add_trace(
-        go.Scatter(
-            x=local,
-            y=served["load_mw"],
-            name="Model forecast",
-            line={"color": MODEL_COLOUR, "width": 2.5},
-        )
-    )
 
 
 # --------------------------------------------------------------------------------------
@@ -234,34 +174,10 @@ def _backtest_error(cfg: Config, backtest: data.BacktestEvidence) -> None:
         )
         return
 
-    rolling = backtest.rolling_mape(window_days=30)
-    figure = go.Figure()
-    figure.add_trace(
-        go.Scatter(
-            x=rolling.index.tz_convert(cfg.data.timezone_local),
-            y=rolling["model"],
-            name="This model",
-            line={"color": MODEL_COLOUR, "width": 2.5},
-        )
+    st.plotly_chart(
+        rolling_error_figure(backtest.rolling_mape(window_days=30), cfg.data.timezone_local),
+        use_container_width=True,
     )
-    figure.add_trace(
-        go.Scatter(
-            x=rolling.index.tz_convert(cfg.data.timezone_local),
-            y=rolling["PSE"],
-            name="PSE day-ahead",
-            line={"color": PSE_COLOUR, "width": 2.5},
-        )
-    )
-    figure.update_layout(
-        template=TEMPLATE,
-        height=320,
-        margin={"l": 10, "r": 10, "t": 30, "b": 10},
-        yaxis_title="30-day rolling MAPE (%)",
-        xaxis_title="",
-        hovermode="x unified",
-        legend={"orientation": "h", "y": 1.15, "x": 0},
-    )
-    st.plotly_chart(figure, use_container_width=True)
 
     overall = backtest.overall()
     model, pse = overall.loc[backtest.model_column], overall.loc[TSO_FORECAST]
@@ -359,33 +275,7 @@ def drift_panel(cfg: Config) -> None:
         )
         return
 
-    figure = go.Figure()
-    figure.add_trace(
-        go.Scatter(
-            x=history.index,
-            y=history["drift_share"],
-            name="Drifted share of inputs",
-            mode="lines+markers",
-            line={"color": MODEL_COLOUR, "width": 2},
-        )
-    )
-    figure.add_hline(
-        y=threshold,
-        line={"color": PSE_COLOUR, "dash": "dash"},
-        annotation_text=f"retrain trigger ({threshold:g})",
-        annotation_position="top left",
-    )
-    figure.update_layout(
-        template=TEMPLATE,
-        height=300,
-        margin={"l": 10, "r": 10, "t": 30, "b": 10},
-        yaxis_title="share of monitored inputs drifting",
-        yaxis_range=[0, 1.05],
-        xaxis_title="",
-        hovermode="x unified",
-        showlegend=False,
-    )
-    st.plotly_chart(figure, use_container_width=True)
+    st.plotly_chart(drift_figure(history, threshold), use_container_width=True)
 
     latest = history.iloc[-1]
     columns = st.columns(3)
@@ -418,18 +308,7 @@ def importance_panel(card: data.ModelCard) -> None:
         st.info("The serving run logged no feature-importance artifact.")
         return
 
-    top = card.importance.nlargest(12, "gain").iloc[::-1]
-    figure = go.Figure(
-        go.Bar(x=top["gain"], y=top["feature"], orientation="h", marker_color=MODEL_COLOUR)
-    )
-    figure.update_layout(
-        template=TEMPLATE,
-        height=380,
-        margin={"l": 10, "r": 10, "t": 20, "b": 10},
-        xaxis_title="total gain",
-        yaxis_title="",
-    )
-    st.plotly_chart(figure, use_container_width=True)
+    st.plotly_chart(importance_figure(card.importance), use_container_width=True)
     st.caption(
         "Gain, as logged by the training run that produced the serving model. The weekly "
         "lag dominating is the signature of a strongly weekly-periodic series."

@@ -75,6 +75,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
+    "kaleido==0.2.1",
     "pre-commit==4.6.1",
     "pytest==9.1.1",
     "ruff==0.16.1",

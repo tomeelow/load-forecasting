@@ -583,3 +583,82 @@ report are now the ones that actually moved.
 Evidence that the load-level drift this reports is dominated by year-on-year trend rather
 than by anything a retrain fixes. The answer then is not a different reference window but
 detrending the comparison, which is a larger change than it sounds.
+
+---
+
+## ADR-010 — The benchmark is measured at PSE's lead time, not at a flat 24 hours
+
+**Status:** accepted · **Date:** 2026-08-21 · **Amends the reported figure in**
+`README.md` and `reports/benchmark_h24.md`
+
+### Context
+
+Every result in this project is reported against PSE's published day-ahead forecast. That
+comparison was being made against a model forecasting a flat 24 hours ahead of every
+target hour — and PSE does not work that way.
+
+PSE's day-ahead load forecast is published **once per day**, by 10:00 local on `D-1` at
+the latest: the ENTSO-E deadline is two hours before the 12:00 day-ahead market gate
+closure, and one publication covers all 24 hours of delivery day `D`. Its effective lead
+time therefore runs from about 14 hours for the 00:00 hour to about 37 hours for the
+23:00 hour, and averages roughly 25.5 — near 24 only by coincidence.
+
+A flat-24h model is therefore **not uniformly easier or harder**. For every hour after
+mid-morning it holds load history PSE did not have when it published; for the small hours
+PSE holds fresher information than it does. Both sides of that asymmetry were present in
+the reported number, and the net direction favoured us.
+
+### Decision
+
+The reported benchmark is produced by a **gate-closure-aligned evaluation**
+(`src/evaluation/gate_closure.py`): for each target hour, the lead time a forecaster
+standing at PSE's publication deadline would have faced is computed from the timestamps,
+and that hour is scored by a direct model trained for exactly that horizon. Twenty-five
+models — `H` from 14 to 38 — instead of one.
+
+The flat-24h figure is not deleted. It is kept as row A of the audit table, because the
+difference between the two is itself the finding.
+
+### Reasoning
+
+It is the only version of the comparison that is a comparison. Anything else measures a
+product PSE does not sell.
+
+The alternatives were both worse. **Arguing the asymmetry away** was tempting because the
+evidence half-supports it — the correlation between the per-hour gap and PSE's lead time
+is only −0.10, and the model's advantage is concentrated in the 05:00–08:00 morning ramp
+where PSE is simply weak rather than where its lead is longest. But "the unfairness
+probably did not matter" is not a claim that survives an interview, and it turned out to
+be worth a measurable amount. **A uniform conservative horizon** — one model at H=38,
+legal at gate closure for every hour of the delivery day — is cheap and bulletproof, and
+it understates the model badly on the early hours where PSE has only a 14-hour lead. It
+answers "can the model still win when handicapped", which is a different and lesser
+question.
+
+The cost is real: 25 fits per origin rather than one, which is why this is a separate
+evaluation run rather than a change to the served model. **ADR-002 is unaffected** —
+direct per-horizon forecasting is exactly what makes this possible; the evaluation simply
+instantiates one model per horizon the product actually needs.
+
+Publication is assumed at the 10:00 deadline rather than at PSE's habit, which is usually
+earlier. That gives PSE the benefit of the doubt and this evaluation the harder side.
+
+### Consequences
+
+- **The published margin over PSE is smaller than it was.** That is the point.
+- The audit re-runs the whole thing a third time with weather features taken from
+  Open-Meteo's archive of past *forecasts* rather than from observed weather, so the
+  horizon effect and the train–serve weather effect are separated rather than pooled.
+- Coverage is anchored to the end of the data (`first_test_start`) rather than starting
+  `initial_train_days` after it begins. On this series the old behaviour reported 2021 —
+  the oldest year available, and one carrying pandemic-recovery demand.
+- The audit is expensive enough that it is not part of CI or the nightly loop. It is run
+  deliberately, and the number it produces is the one that gets quoted.
+- The served model is still a flat 24-hour direct model. What it is *scored against* has
+  changed; what it does has not.
+
+### What would change our mind
+
+PSE publishing intraday updates to the day-ahead figure, or ENTSO-E exposing per-row
+publication timestamps. Either would replace the assumed 10:00 deadline with a measured
+lead time per hour, which is strictly better than the assumption made here.
