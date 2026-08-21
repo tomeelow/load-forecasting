@@ -205,7 +205,10 @@ def load_recent_actuals(cfg: Config, days: int = 14) -> pd.DataFrame:
     if latest is None:
         return dataset.iloc[:0][[ACTUAL_COLUMN, TSO_COLUMN]]
     columns = [c for c in (ACTUAL_COLUMN, TSO_COLUMN) if c in dataset.columns]
-    return dataset.loc[latest - pd.Timedelta(days=days) :, columns]
+    # Ends at the last published actual. The ingested frame runs further — forecast
+    # weather reaches days ahead — and carrying those rows into the chart draws an axis
+    # across empty space that reads as a gap in the data rather than as the future.
+    return dataset.loc[latest - pd.Timedelta(days=days) : latest, columns]
 
 
 def load_served_forecast(cfg: Config, days: int = 3) -> pd.DataFrame:

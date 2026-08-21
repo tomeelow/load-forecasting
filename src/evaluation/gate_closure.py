@@ -228,9 +228,7 @@ def run_gate_closure_backtest(
     )
     return GateClosureResult(
         predictions=predictions,
-        horizons=gate_closure_horizons(
-            predictions.index, tz=tz, publication_hour=publication_hour
-        ),
+        horizons=gate_closure_horizons(predictions.index, tz=tz, publication_hour=publication_hour),
         splits=splits,
         label=label,
         params=params or {},

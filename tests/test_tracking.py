@@ -293,6 +293,9 @@ def test_the_configured_store_does_not_move_with_the_working_directory(monkeypat
     """
     from src.config import REPO_ROOT, load_config
 
+    # This is about what `config.yaml` resolves to, so the environment override the
+    # Compose stack uses — and that the session fixture sets — has to be out of the way.
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     expected = f"sqlite:///{REPO_ROOT / 'mlruns' / 'mlflow.db'}"
     assert load_config().mlflow.tracking_uri == expected
 
@@ -300,10 +303,11 @@ def test_the_configured_store_does_not_move_with_the_working_directory(monkeypat
     assert load_config().mlflow.tracking_uri == expected
 
 
-def test_an_absolute_store_is_left_alone(tmp_path):
+def test_an_absolute_store_is_left_alone(tmp_path, monkeypatch):
     """The tests point the URI at a temporary file; resolution must not touch it."""
     from src.config import _resolve_tracking_uri
 
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     absolute = f"sqlite:///{tmp_path}/mlflow.db"
 
     assert _resolve_tracking_uri(absolute) == absolute

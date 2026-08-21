@@ -1,0 +1,15 @@
+# A fixed light theme. The page is a portfolio artifact that gets screenshotted and
+# shared, so it should look the same for everyone rather than inheriting whatever the
+# viewer's browser prefers — and the chart colours below are chosen against white.
+[theme]
+base = "light"
+primaryColor = "#2563eb"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f1f5f9"
+textColor = "#111827"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
