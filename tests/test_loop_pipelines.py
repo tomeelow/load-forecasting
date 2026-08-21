@@ -290,3 +290,43 @@ def test_the_loop_step_still_exits_zero_when_there_is_too_little_history(
 class _TrainResult:
     promoted: bool
     gate_reason: str
+
+
+def test_every_drift_check_leaves_a_row_behind(loop_cfg, tmp_path, dataset):
+    """The dashboard plots the share as a trend, which needs the checks to accumulate."""
+    from src.monitoring.history import DriftHistory
+
+    history = DriftHistory(tmp_path / "drift.csv")
+    log = PredictionLog(tmp_path / "p.db")
+
+    check_drift.run(loop_cfg, log=log, history=history, now=NOW, write_report=False)
+    check_drift.run(
+        loop_cfg, log=log, history=history, now=NOW + pd.Timedelta(days=1), write_report=False
+    )
+
+    recorded = history.read()
+    assert len(recorded) == 2
+    assert recorded["drift_share"].notna().all()
+    assert recorded["monitored_features"].gt(0).all()
+
+
+def test_a_quiet_check_is_recorded_as_well_as_a_noisy_one(loop_cfg, tmp_path, dataset):
+    """A run of quiet nights is what makes a noisy one legible."""
+    from src.monitoring.history import DriftHistory
+
+    history = DriftHistory(tmp_path / "drift.csv")
+
+    result = check_drift.run(
+        loop_cfg,
+        log=PredictionLog(tmp_path / "p.db"),
+        history=history,
+        now=NOW,
+        write_report=False,
+    )
+
+    assert history.read()["status"].iloc[0] == result.status
+
+
+def test_the_drift_history_lands_in_the_state_directory_the_workflow_carries(loop_cfg):
+    """It cannot be recomputed later, so it has to travel with the prediction log."""
+    assert loop_cfg.state.drift_history_path.parent == loop_cfg.state.dir

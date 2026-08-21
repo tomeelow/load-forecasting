@@ -53,14 +53,22 @@ def _mirror() -> MirrorResult:
 
 
 @st.cache_data(ttl=300)
-def _cached(loader: str, _mirrored_at=None, **kwargs):
-    """Re-read artifacts every five minutes; the loop writes them at most once a day.
-
-    `_mirrored_at` is part of the cache key and nothing else: a fresh mirror must not be
-    read through a cache populated from the previous snapshot.
-    """
+def _load(loader: str, snapshot: str | None, **kwargs):
+    """Re-read artifacts every five minutes; the loop writes them at most once a day."""
     cfg = load_config()
     return getattr(data, loader)(cfg, **kwargs)
+
+
+def _cached(loader: str, **kwargs):
+    """Read an artifact through the cache, keyed on which snapshot produced it.
+
+    The mirrored commit is part of the key so a fresh mirror is never read through a
+    cache populated from the previous snapshot. It is a plain argument rather than a
+    leading-underscore one because Streamlit *excludes* underscore-prefixed arguments
+    from the cache key — which would have made this do exactly nothing. Locally the
+    commit is `None` and constant, so the key collapses to the loader and its arguments.
+    """
+    return _load(loader, _mirror().commit, **kwargs)
 
 
 def main() -> None:
