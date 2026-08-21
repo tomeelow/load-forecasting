@@ -589,7 +589,8 @@ detrending the comparison, which is a larger change than it sounds.
 ## ADR-010 — The benchmark is measured at PSE's lead time, not at a flat 24 hours
 
 **Status:** accepted · **Date:** 2026-08-21 · **Amends the reported figure in**
-`README.md` and `reports/benchmark_h24.md`
+`README.md` and `reports/benchmark_h24.md` · **Outcome recorded below:** the margin did
+not shrink, it inverted
 
 ### Context
 
@@ -643,9 +644,35 @@ instantiates one model per horizon the product actually needs.
 Publication is assumed at the 10:00 deadline rather than at PSE's habit, which is usually
 earlier. That gives PSE the benefit of the doubt and this evaluation the harder side.
 
+### Outcome
+
+Run over the most recent year (8,736 hours, 2025-08-21 → 2026-08-19), the change did not
+narrow the margin — it removed it:
+
+| Variant | Model | PSE | Gap |
+|---|---|---|---|
+| flat 24 h, observed weather | 2.364% | 2.351% | +0.013 pp |
+| gate-closure horizons | 2.576% | 2.351% | +0.225 pp |
+| gate-closure + day-ahead weather | 2.642% | 2.351% | +0.291 pp |
+
+The horizon correction is worth 0.212 pp and the weather correction 0.066 pp. Together
+that is larger than the whole margin the flat comparison showed, and the flat comparison
+on this window was already a tie rather than the 0.711 pp win reported from 2021.
+
+The decision stands regardless of which way the number moved — that is what makes it a
+decision about method rather than about outcome. It is recorded here because an ADR that
+anticipates a consequence and gets a different one should say so.
+
+A second finding fell out of the same run and is the more useful half: the correlation
+between the per-hour gap and PSE's lead time is **+0.65**. This model is level with PSE
+at a 23-hour lead and 0.82 pp behind at 37. It leans on recent load lags, and those are
+gone at 37 hours; PSE evidently has structural information that does not decay. That
+points at training per-horizon feature sets rather than stretching an H=24 model across a
+delivery day, and it is not visible in the aggregate at all.
+
 ### Consequences
 
-- **The published margin over PSE is smaller than it was.** That is the point.
+- **The published margin over PSE is gone.** The README says so.
 - The audit re-runs the whole thing a third time with weather features taken from
   Open-Meteo's archive of past *forecasts* rather than from observed weather, so the
   horizon effect and the train–serve weather effect are separated rather than pooled.
