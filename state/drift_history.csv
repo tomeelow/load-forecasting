@@ -1,0 +1,2 @@
+checked_at,status,drift_share,drifted_features,monitored_features,drifted_names,reference_strategy,reference_rows,current_rows,rolling_mape,tso_mape,scored_predictions
+2026-08-22T05:53:01.612968+00:00,drift,0.7272727272727273,8,11,cloud_cover load_lag_168 load_lag_192 load_lag_24 load_lag_25 load_roll_mean_24 load_roll_std_24 wind_ms,seasonal,2016,335,,,0
