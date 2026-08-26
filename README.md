@@ -3,6 +3,9 @@
 Hourly forecasts of how much electricity Poland will use tomorrow, benchmarked against
 the grid operator's own published forecast.
 
+**[Live dashboard →](https://pl-load-forecast.streamlit.app)** — what the pipeline
+recorded on its last run, refreshed hourly from the state branch.
+
 Poland's transmission system operator, **PSE**, has to decide a day in advance how much
 generation to schedule. Too little and the system buys expensive balancing energy at
 short notice; too much and plants are paid to stand ready for demand that never arrives.
@@ -427,17 +430,20 @@ what the state branch buys, and it is why the whole system costs nothing to run.
 
 ### Deploying the dashboard
 
-[`deploy/space/README-deploy.md`](deploy/space/README-deploy.md) has the Hugging Face
-Spaces route (Docker SDK, free tier, no payment method). The deployed page mirrors the
-`pipeline-state` branch hourly and says on the page that it is a mirror rather than a
-live service, because it cannot reach an API or fetch fresh weather. Render, Railway and
-Fly.io work the same way with the same two environment variables; free instances on all
-of them sleep when idle.
+Deployed at **<https://pl-load-forecast.streamlit.app>** on Streamlit Community Cloud —
+[`deploy/streamlit-cloud.md`](deploy/streamlit-cloud.md) is the route. It builds from
+this repository, so it reads `uv.lock` rather than a second list of pinned versions, and
+the page mirrors the `pipeline-state` branch hourly. That clone is filtered and sparse:
+it fetches the ~4MB the page reads rather than the ~355MB of LightGBM boosters the branch
+holds, which is the difference between a mirror that refreshes and one that times out.
 
-> **TODO — deployed URL.** No Space exists yet: creating one needs a Hugging Face
-> account and a token, which is a step for the repository owner rather than something
-> this repository automates. Follow `deploy/space/README-deploy.md` and paste the link
-> here.
+The page says on itself that it is a mirror rather than a live service, because it cannot
+reach an API or fetch fresh weather.
+
+[`deploy/space/README-deploy.md`](deploy/space/README-deploy.md) keeps the Hugging Face
+Spaces route for the container, but it is **no longer free** — HF now bills the SDK, not
+just the hardware, and Gradio and Docker Spaces require PRO on a personal account. Render
+and Fly.io run the same image; check their current terms rather than assuming a free tier.
 
 ---
 
@@ -555,8 +561,9 @@ config/          pipeline parameters (dates, cities, horizon, thresholds, bounds
 tests/           leakage, DST, timezone, validation, retry, gate, loop, dashboard
 docs/            plan, ADR, evaluation audit, blog post, demo script
 docker/          the image both services are built from
-deploy/space/    Hugging Face Spaces deployment
-reports/         generated benchmark tables (the .md files are versioned)
+deploy/          Streamlit Community Cloud route, and the container one for Spaces
+packages.txt     apt packages for Community Cloud: the git the state mirror shells out to
+reports/         generated benchmark tables, plus the gzipped backtest the page plots
 monitoring/      generated drift reports (HTML, not versioned)
 state/           prediction log, drift history, last-success markers (ADR-008)
 mlruns/          MLflow tracking database and artifacts (not versioned)
