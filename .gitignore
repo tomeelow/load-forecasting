@@ -19,9 +19,13 @@ mlflow.db
 # generated per run and uploaded as workflow artifacts, never committed.
 monitoring/*.html
 # Evaluation output: the generated benchmark tables are deliverables and are
-# versioned; the prediction dumps behind them are not.
+# versioned; the raw prediction dumps behind them are not — with one exception. The
+# dashboard plots the gate-closure backtest, and a host that builds from this repository
+# can only show what the repository carries, so that one is committed gzipped (660KB ->
+# 199KB). Regenerate it with `pipelines.audit`, then re-gzip; see deploy/streamlit-cloud.md.
 reports/*
 !reports/*.md
+!reports/*.csv.gz
 
 # Secrets
 .env

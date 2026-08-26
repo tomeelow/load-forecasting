@@ -224,6 +224,41 @@ class TestBacktestEvidence:
         assert backtest.model_column == data.AUDIT_MODEL
         assert "gate-closure" in backtest.label
 
+    def test_a_gzipped_backtest_is_read_when_that_is_all_there_is(self, populated_cfg, dataset):
+        """What a host that builds from the git repository sees: only the committed .gz."""
+        populated_cfg.backtest.reports_dir.mkdir(parents=True, exist_ok=True)
+        actual = dataset["load_mw"].dropna()
+        pd.DataFrame(
+            {
+                "actual": actual,
+                data.AUDIT_MODEL: actual * 1.02,
+                TSO_FORECAST: actual * 1.03,
+            }
+        ).to_csv(populated_cfg.backtest.reports_dir / "audit_c_h24.csv.gz")
+
+        backtest = data.load_backtest(populated_cfg)
+
+        assert backtest.available
+        assert backtest.model_column == data.AUDIT_MODEL
+        assert backtest.source.name.endswith(".csv.gz")
+
+    def test_a_freshly_written_csv_wins_over_a_stale_gzip(self, populated_cfg, dataset):
+        """Re-running the audit must not leave the page showing the committed snapshot."""
+        populated_cfg.backtest.reports_dir.mkdir(parents=True, exist_ok=True)
+        actual = dataset["load_mw"].dropna()
+        for suffix, factor in ((".csv.gz", 1.10), (".csv", 1.02)):
+            pd.DataFrame(
+                {
+                    "actual": actual,
+                    data.AUDIT_MODEL: actual * factor,
+                    TSO_FORECAST: actual * 1.03,
+                }
+            ).to_csv(populated_cfg.backtest.reports_dir / f"audit_c_h24{suffix}")
+
+        backtest = data.load_backtest(populated_cfg)
+
+        assert backtest.source.suffix == ".csv"
+
     def test_the_flat_horizon_run_is_used_when_no_audit_exists(self, populated_cfg, dataset):
         backtest_csv(populated_cfg, dataset)
 

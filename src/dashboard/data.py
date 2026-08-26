@@ -283,14 +283,21 @@ def load_backtest(cfg: Config, horizon: int = 24, *, prefer_audit: bool = True) 
     first.
     """
     reports = cfg.backtest.reports_dir
-    candidates: list[tuple[Path, str, str]] = []
+    names: list[tuple[str, str, str]] = []
     if prefer_audit:
-        candidates.append(
-            (reports / f"audit_c_h{horizon}.csv", AUDIT_MODEL, "gate-closure-aligned backtest")
-        )
-    candidates.append(
-        (reports / f"predictions_h{horizon}.csv", BACKTEST_MODEL, "rolling-origin backtest")
-    )
+        names.append((f"audit_c_h{horizon}", AUDIT_MODEL, "gate-closure-aligned backtest"))
+    names.append((f"predictions_h{horizon}", BACKTEST_MODEL, "rolling-origin backtest"))
+
+    # Each name is tried plain, then gzipped. A working tree reads the file the audit just
+    # wrote; a deployment reads the compressed copy committed for it, because a host that
+    # builds from the git repository can only see what the repository carries and the raw
+    # dumps are too big to version. `read_csv` decompresses by extension, so nothing below
+    # needs to know which one it got. Plain first, so a fresh audit wins over a stale one.
+    candidates: list[tuple[Path, str, str]] = [
+        (reports / f"{name}{suffix}", column, label)
+        for name, column, label in names
+        for suffix in (".csv", ".csv.gz")
+    ]
 
     for path, model_column, label in candidates:
         if not path.exists():
