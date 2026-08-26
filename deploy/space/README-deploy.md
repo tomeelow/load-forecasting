@@ -8,15 +8,15 @@ this repository automates.
    **Docker → Blank**, hardware **CPU basic (free)**, visibility **Public**.
 
 2. **Push these files to it.** The Space is a git repository of its own. It needs the
-   package, the lockfile, the Streamlit theme, and the two files in this directory at
-   its root. Run this from the repository root:
+   package, the lockfile, the Streamlit theme, the backtest reports, and the two files
+   in this directory at its root. Run this from the repository root:
 
    ```bash
    git clone https://huggingface.co/spaces/<your-username>/<space-name> /tmp/space
    ```
 
    ```bash
-   cp -R src pipelines config .streamlit pyproject.toml uv.lock /tmp/space/ && \
+   cp -R src pipelines config .streamlit reports pyproject.toml uv.lock /tmp/space/ && \
      cp deploy/space/Dockerfile deploy/space/README.md /tmp/space/
    ```
 
@@ -28,6 +28,14 @@ this repository automates.
    Hugging Face reads its YAML front matter to configure the Space, and the build
    backend needs *a* README present because `pyproject.toml` declares one. Omitting it
    fails the build with a hatchling error that mentions neither.
+
+   `reports` carries the backtest the benchmark panel plots. It is gitignored, so it
+   exists only on the machine that ran `python -m pipelines.audit` — if that is not this
+   one, run the audit before copying or the build fails on the missing directory. That is
+   the better failure: a build that stops is easier to notice than a page that quietly
+   drops the PSE comparison. Unlike everything in step 3 it does not refresh itself. It is
+   a snapshot, the panel prints the window it covers, and recomputing the backtest means
+   re-copying and rebuilding.
 
 3. **Point it at the state branch.** In the Space's *Settings → Variables and secrets*,
    add a **variable** (not a secret — it is a public URL):

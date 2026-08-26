@@ -33,6 +33,14 @@ COPY --chown=user src ./src
 COPY --chown=user pipelines ./pipelines
 COPY --chown=user config ./config
 COPY --chown=user .streamlit ./.streamlit
+# The backtest, baked in rather than mirrored. `docker compose` bind-mounts `./reports`
+# and the repository's `.dockerignore` keeps it out of that image; a Space has nothing to
+# mount, and the state branch carries only what the daily loop writes — the backtest is
+# not that, because it costs a full refit at each of 26 origins and runs on demand, not
+# nightly. Without this the benchmark panel renders empty and the page loses the PSE
+# comparison it exists to make. The figure is a snapshot and the panel says so, printing
+# the window it covers. Re-copy it and rebuild whenever the backtest is recomputed.
+COPY --chown=user reports ./reports
 # `pyproject.toml` names README.md as the project readme, so the build backend needs it
 # present for the install below — the image does not use it, but hatchling refuses
 # without it. Copied here rather than beside the lockfile so editing prose does not
