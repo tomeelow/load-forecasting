@@ -36,6 +36,19 @@ one service against another is yours to do, not something this repository automa
 
 Then click deploy. First build takes a few minutes.
 
+## Renaming a config key needs a reboot
+
+Community Cloud reruns the script when the repository changes, but it does not re-import
+modules that are already in memory. `load_config()` reads `config/config.yaml` from disk
+on every call while the dataclasses it fills were defined at import time, so a commit that
+*renames* a key lands as a new YAML against an old schema and the page dies with a
+`TypeError` naming the key — even though the repository is perfectly consistent.
+
+Adding or changing a *value* is fine. Renaming, adding or removing a **key** is not, and
+the fix is not another commit: open the app on share.streamlit.io and use **Manage app →
+⋮ → Reboot app**, which starts a fresh process that imports the new schema. This happened
+on 2026-08-26 when `keep_runs_days` became `keep_runs`.
+
 ## What the host actually installs
 
 `uv.lock` is the **first** dependency file Community Cloud looks for, ahead of `Pipfile`,
