@@ -67,12 +67,13 @@ Nothing the dashboard plots is in the repository — `state/`, `mlruns/` and
 `data/processed/` are all gitignored, and a host that builds from git can only see what
 git carries. They arrive at runtime instead: `mirror_state` shallow-clones the
 `pipeline-state` branch that the daily GitHub Actions loop force-pushes, and the page
-refreshes it hourly. That clone is filtered and sparse, so it fetches the ~4MB the page
-reads rather than the ~355MB the branch holds — see `src/dashboard/state_sync.py`.
+refreshes it hourly. That clone is filtered and sparse, so it fetches only the few
+megabytes the page reads rather than the whole MLflow store the branch carries — see
+`src/dashboard/state_sync.py`.
 
 The one exception is the backtest. `reports/audit_c_h24.csv.gz` **is** committed, because
 the benchmark panel — the PSE comparison this project exists to make — plots it, and it is
-not something the nightly loop produces: the audit refits at each of 26 origins and runs
+not something the nightly loop produces: the audit refits at each of 13 origins and runs
 on demand. It is gzipped to keep 660KB of prediction dump out of git as 199KB, and
 `load_backtest` reads either form. Unlike everything mirrored, it does not refresh itself.
 It is a snapshot, the panel prints the window it covers, and recomputing it means:

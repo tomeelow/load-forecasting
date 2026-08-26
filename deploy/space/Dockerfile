@@ -36,7 +36,7 @@ COPY --chown=user .streamlit ./.streamlit
 # The backtest, baked in rather than mirrored. `docker compose` bind-mounts `./reports`
 # and the repository's `.dockerignore` keeps it out of that image; a Space has nothing to
 # mount, and the state branch carries only what the daily loop writes — the backtest is
-# not that, because it costs a full refit at each of 26 origins and runs on demand, not
+# not that, because it costs a full refit at each of 13 origins and runs on demand, not
 # nightly. Without this the benchmark panel renders empty and the page loses the PSE
 # comparison it exists to make. The figure is a snapshot and the panel says so, printing
 # the window it covers. Re-copy it and rebuild whenever the backtest is recomputed.
