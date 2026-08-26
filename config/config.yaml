@@ -161,7 +161,15 @@ retraining:
   # suddenly, and a model that is never refreshed decays without ever tripping an alarm.
   cadence_days: 7
   tune: true
-  # Tracked runs older than this that no alias points at are deleted, and `mlflow gc`
-  # reclaims their artifacts. Without it the state carried between scheduled runs grows
-  # by several megabytes per retrain and eventually stops being pushable.
-  keep_runs_days: 120
+  # How many unaliased runs to keep beside the aliased ones. Everything older is
+  # soft-deleted and `mlflow gc` reclaims its artifacts. The champion is protected by its
+  # alias and is never counted here, so this is the extra history kept for comparison and
+  # rollback — six is roughly the last two nights, since a retrain logs three runs.
+  #
+  # A count rather than an age. This was `keep_runs_days: 120`, which failed twice over:
+  # an age bounds how long a run is kept but not how many arrive meanwhile, and the
+  # deletion it asked for never reclaimed a booster anyway — MLflow 3 keeps logged models
+  # beside the run rather than inside it, so neither `delete_run` nor `mlflow gc` touched
+  # them. The state branch had reached 393MB, 388MB of it 42 boosters, growing ~38MB a
+  # day while a 120-day policy was nominally in force. See ADR-008.
+  keep_runs: 6

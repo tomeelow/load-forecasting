@@ -104,7 +104,7 @@ def run(
     state.clear_retrain_flag()
     state.record_success(PIPELINE, now)
 
-    prune_runs(MlflowClient(), cfg.mlflow, keep_days=cfg.retraining.keep_runs_days, now=now)
+    prune_runs(MlflowClient(), cfg.mlflow, keep_runs=cfg.retraining.keep_runs)
 
     outcome = RetrainOutcome(
         status=PROMOTED if result.promoted else TRAINED_NOT_PROMOTED,

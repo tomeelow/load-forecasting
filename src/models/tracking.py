@@ -11,6 +11,7 @@ Postgres server without touching this module's callers.
 
 from __future__ import annotations
 
+import shutil
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,7 @@ import pandas as pd
 from loguru import logger
 from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
+from mlflow.utils.file_utils import local_file_uri_to_path
 
 from src.config import MlflowConfig
 from src.models.lgbm import TrainedModel, feature_importance, feature_importance_figure
@@ -185,22 +187,25 @@ def prune_runs(
     client: MlflowClient,
     cfg: MlflowConfig,
     *,
-    keep_days: int,
-    now: pd.Timestamp | None = None,
+    keep_runs: int,
 ) -> list[str]:
-    """Soft-delete tracked runs older than `keep_days` that no alias points at.
+    """Soft-delete every unaliased run except the `keep_runs` most recent.
 
-    The artifact store grows by several megabytes per retrain, and the whole of it is
-    carried between scheduled runs (ADR-008). Without retention that mechanism has a
-    quiet expiry date — it works for months and then the state push starts timing out.
+    The whole artifact store is carried between scheduled runs on a force-pushed branch
+    (ADR-008), and a LightGBM booster at `num_boost_round: 2000` is around nine megabytes
+    — two per training run, three training runs a night. Retention is what stops that
+    mechanism from acquiring a quiet expiry date.
 
-    Aliased versions are never touched: whatever is serving must remain loadable, and so
-    must anything a rollback would reach for. Soft-deleted runs keep their metrics until
-    `mlflow gc` reclaims the files, so the history stays readable in the meantime.
+    **Counted, not aged.** An age-based cutoff bounds how long runs are kept but not how
+    many arrive in the meantime, so the branch it protects still grows with the retrain
+    cadence: at a run a night, 120 days of history is 120 nights of boosters. A count
+    bounds the store itself, which is the thing that has to fit.
+
+    Aliased versions are never touched and never counted, so the champion survives any
+    value of `keep_runs` and so does anything a rollback would reach for. `keep_runs` is
+    the *extra* history kept beside them. Soft-deleted runs keep their metrics until
+    `mlflow gc` reclaims the files, so the comparison stays readable in the meantime.
     """
-    now = pd.Timestamp(now or pd.Timestamp.now(tz="UTC")).tz_convert("UTC")
-    cutoff_ms = int((now - pd.Timedelta(days=keep_days)).timestamp() * 1000)
-
     protected = set()
     for version in client.search_model_versions(f"name='{cfg.registered_model_name}'"):
         if version.aliases:
@@ -215,23 +220,61 @@ def prune_runs(
     if experiment is None:
         return []
 
+    # Newest first, so "the most recent `keep_runs`" is simply the head of the list.
+    # Ordering is asked of the store rather than applied afterwards: `search_runs` pages,
+    # and sorting one page would silently keep the newest of an arbitrary subset.
+    candidates = [
+        run
+        for run in client.search_runs(
+            [experiment.experiment_id],
+            order_by=["attributes.start_time DESC"],
+            max_results=5000,
+        )
+        if run.info.lifecycle_stage == "active" and run.info.run_id not in protected
+    ]
+
     deleted = []
-    for run in client.search_runs([experiment.experiment_id], max_results=5000):
-        if run.info.run_id in protected or run.info.lifecycle_stage != "active":
-            continue
-        if run.info.start_time and run.info.start_time < cutoff_ms:
-            client.delete_run(run.info.run_id)
-            deleted.append(run.info.run_id)
+    for run in candidates[max(keep_runs, 0) :]:
+        _delete_logged_models(client, run.info.experiment_id, run.info.run_id)
+        client.delete_run(run.info.run_id)
+        deleted.append(run.info.run_id)
 
     if deleted:
         logger.info(
-            "Marked {} run(s) older than {} days for deletion; `mlflow gc` reclaims the "
-            "artifacts. {} aliased run(s) protected.",
+            "Marked {} run(s) for deletion, keeping the {} most recent and {} aliased "
+            "one(s); `mlflow gc` reclaims the artifacts.",
             len(deleted),
-            keep_days,
+            min(keep_runs, len(candidates)),
             len(protected),
         )
     return deleted
+
+
+def _delete_logged_models(client: MlflowClient, experiment_id: str, run_id: str) -> int:
+    """Delete the models a run logged, and the files behind them.
+
+    **`delete_run` does not do this, and neither does `mlflow gc`.** MLflow 3 stores a
+    logged model as a first-class entity in `<experiment>/models/m-*`, a sibling of the
+    run directory rather than a child of it, and `gc` only reclaims a run's own artifact
+    directory. Deleting runs alone therefore left every booster on disk: measured on
+    2026-08-26, pruning three of four runs and then running `gc` reclaimed 29KB of a
+    938KB store and not one model directory. Since the boosters are the entire quantity
+    this retention exists to bound, they are removed here explicitly.
+
+    The path comes from MLflow rather than from an assumption about its layout. A store
+    that is not on the local filesystem is left alone: its lifecycle belongs to whatever
+    is hosting it, and guessing at a remote delete is worse than keeping a stale object.
+    """
+    removed = 0
+    for model in client.search_logged_models(
+        [experiment_id], filter_string=f"source_run_id='{run_id}'"
+    ):
+        location = getattr(model, "artifact_location", None)
+        client.delete_logged_model(model.model_id)
+        if location and location.startswith("file:"):
+            shutil.rmtree(local_file_uri_to_path(location), ignore_errors=True)
+        removed += 1
+    return removed
 
 
 def apply_gate(

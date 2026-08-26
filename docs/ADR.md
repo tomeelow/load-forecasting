@@ -422,8 +422,30 @@ At the start of each run, restore `state/`, `mlruns/` and `data/processed/` from
 orphan branch named `pipeline-state`. At the end, commit them as a **single snapshot**
 and `git push --force` back to that branch.
 
-Runs older than `retraining.keep_runs_days` that no alias points at are deleted and
-their artifacts reclaimed with `mlflow gc`, so the snapshot does not grow without bound.
+Every unaliased run except the `retraining.keep_runs` most recent is deleted and its
+artifacts reclaimed with `mlflow gc`, so the snapshot does not grow without bound.
+
+That retention was originally an age — `keep_runs_days: 120` — and it was failing in two
+separate ways, of which the second is the one that mattered.
+
+An age caps how long a run is kept, not how many arrive while it is being kept, so the
+snapshot grew with the retrain cadence regardless: a booster at `num_boost_round: 2000`
+is about nine megabytes, a training run logs two, and a retrain logs three runs.
+
+More seriously, **the deletion it asked for never reclaimed a booster.** MLflow 3 stores
+a logged model as a first-class entity in `<experiment>/models/m-*`, a sibling of the run
+directory rather than a child of it. `delete_run` does not remove it and `mlflow gc` does
+not either, since `gc` only reclaims a run's own artifact directory. Measured on
+2026-08-26: soft-deleting three of four runs and then running `gc` freed 29KB of a 938KB
+store and removed no model at all. That is why the branch reached 393 MiB — 388 MiB of it
+42 boosters across 21 runs, growing 38 MiB a day — while a retention policy was nominally
+in force.
+
+Pruning now deletes the logged models explicitly, at the artifact location MLflow itself
+reports, and keeps a count rather than an age. A count bounds the store, which is the
+quantity that has to fit through a `git push`; deleting the models is what makes the
+bound real. Aliased runs are never counted and never touched, so the champion survives
+any value of `keep_runs`.
 
 ### Reasoning
 

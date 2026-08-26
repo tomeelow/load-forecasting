@@ -294,6 +294,22 @@ store needs an account and a bill. So the loop force-pushes a single snapshot of
 start of the next run ([ADR-008](docs/ADR.md)). The hosted dashboard reads that same
 branch.
 
+**A retention policy that deleted nothing.** A snapshot pushed nightly grows nightly, and
+the growth is almost entirely LightGBM boosters — about nine megabytes each at
+`num_boost_round: 2000`, two per training run, three training runs per retrain. There was
+a policy for this, `keep_runs_days: 120`, and by 2026-08-26 the branch was 393 MiB anyway,
+388 MiB of it 42 boosters, growing 38 MiB a day.
+
+The policy was deleting runs, and in MLflow 3 that does not delete the model. A logged
+model is a first-class entity stored beside the run rather than inside it, so neither
+`delete_run` nor `mlflow gc` reclaims it: soft-deleting three runs of four and running
+`gc` freed 29 KB of a 938 KB store. Pruning now deletes the logged models explicitly, and
+keeps the six most recent unaliased runs rather than 120 days of them. The champion is
+protected by its alias and is not counted, so it survives any value. A
+[regression test](tests/test_tracking.py) asserts the booster files are gone, because a
+policy that only soft-deletes run records looks identical in the logs and bounds nothing
+on disk.
+
 ---
 
 ## Data inventory

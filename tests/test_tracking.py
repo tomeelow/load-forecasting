@@ -14,6 +14,7 @@ import mlflow
 import pandas as pd
 import pytest
 from mlflow.tracking import MlflowClient
+from mlflow.utils.file_utils import local_file_uri_to_path
 
 from src.config import MlflowConfig
 from src.models.lgbm import train
@@ -25,6 +26,7 @@ from src.models.tracking import (
     configure,
     latest_version_for_run,
     log_run,
+    prune_runs,
 )
 
 MODEL_NAME = "test_load_lgbm"
@@ -331,3 +333,132 @@ def test_the_unconfigured_default_store_lands_outside_the_repository():
 
     assert REPO_ROOT not in fallback.parents
     assert not (REPO_ROOT / "mlflow.db").exists(), "a stray store was written to the repo root"
+
+
+class TestPruningTheRunStore:
+    """Retention, which is what stops ADR-008's snapshot from outgrowing a `git push`.
+
+    These delete things, so the failure that matters is over-deletion: a champion that
+    is pruned is production made unloadable by a housekeeping step.
+    """
+
+    def bare_run(self, name: str) -> str:
+        """A run with no model. Pruning reads run info, so a booster would only be slow."""
+        with mlflow.start_run(run_name=name) as run:
+            return run.info.run_id
+
+    def active(self, client) -> set[str]:
+        experiment = client.get_experiment_by_name("test-experiment")
+        return {
+            run.info.run_id
+            for run in client.search_runs([experiment.experiment_id])
+            if run.info.lifecycle_stage == "active"
+        }
+
+    def test_it_keeps_the_most_recent_and_deletes_the_rest(self, tracking):
+        client = MlflowClient()
+        runs = [self.bare_run(f"r{i}") for i in range(5)]
+
+        deleted = prune_runs(client, tracking, keep_runs=2)
+
+        # runs[-1] and runs[-2] are the two most recent, so the first three go.
+        assert set(deleted) == set(runs[:3])
+        assert self.active(client) == set(runs[3:])
+
+    def test_the_champion_survives_however_old_it_is(self, tracking, tiny_model):
+        """The oldest run in the store, and the only one that must never be deleted."""
+        model, X_sample = tiny_model
+        client = MlflowClient()
+
+        champion = log_run(spec(), model, X_sample, registered_model_name=MODEL_NAME)
+        version = latest_version_for_run(client, MODEL_NAME, champion)
+        apply_gate(client, MODEL_NAME, version, ALIAS, promotion_decision(2.0, 4.0, None))
+        newer = [self.bare_run(f"r{i}") for i in range(4)]
+
+        deleted = prune_runs(client, tracking, keep_runs=1)
+
+        assert champion not in deleted
+        assert champion in self.active(client)
+        assert set(deleted) == set(newer[:3])
+
+    def test_an_aliased_run_does_not_spend_the_budget(self, tracking, tiny_model):
+        """`keep_runs` is history kept *beside* the champion, not including it."""
+        model, X_sample = tiny_model
+        client = MlflowClient()
+
+        champion = log_run(spec(), model, X_sample, registered_model_name=MODEL_NAME)
+        version = latest_version_for_run(client, MODEL_NAME, champion)
+        apply_gate(client, MODEL_NAME, version, ALIAS, promotion_decision(2.0, 4.0, None))
+        newer = [self.bare_run(f"r{i}") for i in range(2)]
+
+        prune_runs(client, tracking, keep_runs=2)
+
+        assert self.active(client) == {champion, *newer}
+
+    def test_a_store_smaller_than_the_budget_loses_nothing(self, tracking):
+        client = MlflowClient()
+        runs = [self.bare_run(f"r{i}") for i in range(3)]
+
+        assert prune_runs(client, tracking, keep_runs=10) == []
+        assert self.active(client) == set(runs)
+
+    def test_pruning_twice_deletes_nothing_the_second_time(self, tracking):
+        """Already-deleted runs are not active, so a nightly loop does not re-delete them."""
+        client = MlflowClient()
+        [self.bare_run(f"r{i}") for i in range(4)]
+
+        first = prune_runs(client, tracking, keep_runs=1)
+        second = prune_runs(client, tracking, keep_runs=1)
+
+        assert len(first) == 3
+        assert second == []
+
+    def test_it_reclaims_the_booster_files_not_just_the_run_records(self, tracking, tiny_model):
+        """The failure that made the previous policy decorative.
+
+        `delete_run` does not remove MLflow 3's logged models and `mlflow gc` does not
+        either — they sit beside the run rather than inside it. Retention that only
+        soft-deletes runs therefore bounds nothing on disk, which is how the state branch
+        reached 393MB of boosters while a 120-day policy was nominally in force.
+        """
+        model, X_sample = tiny_model
+        client = MlflowClient()
+        runs = [log_run(spec(), model, X_sample) for _ in range(3)]
+        experiment = client.get_experiment_by_name("test-experiment")
+
+        locations = {
+            run_id: [
+                Path(local_file_uri_to_path(logged.artifact_location))
+                for logged in client.search_logged_models(
+                    [experiment.experiment_id], filter_string=f"source_run_id='{run_id}'"
+                )
+            ]
+            for run_id in runs
+        }
+        assert all(paths for paths in locations.values()), "no models were logged to reclaim"
+        assert all(p.exists() for paths in locations.values() for p in paths)
+
+        deleted = prune_runs(client, tracking, keep_runs=1)
+
+        assert deleted, "nothing was pruned, so nothing was proven"
+        for run_id in deleted:
+            for path in locations[run_id]:
+                assert not path.exists(), f"{path} survived pruning"
+        # The most recent run is the one kept, and its booster must still be there.
+        assert all(path.exists() for path in locations[runs[-1]])
+
+    def test_an_experiment_that_does_not_exist_yet_is_not_an_error(self, tmp_path):
+        """First run of a fresh deployment: nothing has been logged to prune."""
+        from src.config import MlflowConfig
+
+        cfg = MlflowConfig(
+            tracking_uri=f"sqlite:///{tmp_path}/empty.db",
+            experiment="never-created",
+            registered_model_name=MODEL_NAME,
+            champion_alias=ALIAS,
+        )
+        configure(cfg)
+        try:
+            assert prune_runs(MlflowClient(), cfg, keep_runs=3) == []
+        finally:
+            mlflow.set_tracking_uri(None)
