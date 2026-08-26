@@ -38,6 +38,10 @@ def state_remote(tmp_path) -> str:
         ("state/drift_history.csv", "checked_at,status\n"),
         ("mlruns/mlflow.db", "not really sqlite either"),
         ("data/processed/dataset.parquet", "not really parquet"),
+        ("mlruns/1/abc/artifacts/feature_importance.json", '{"columns": [], "data": []}'),
+        # The real branch is ~99% these, at tens of megabytes each. Nothing on the page
+        # opens one, and fetching them is what used to exhaust the clone timeout.
+        ("mlruns/1/models/m-abc/artifacts/model.lgb", "tree\n" * 10_000),
     ):
         path = work / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +76,23 @@ def test_it_copies_every_path_the_loop_persists(tmp_path, state_remote):
     assert (destination / "state" / "predictions.db").exists()
     assert (destination / "mlruns" / "mlflow.db").exists()
     assert (destination / "data" / "processed" / "dataset.parquet").exists()
+
+
+def test_it_leaves_the_boosters_on_the_branch(tmp_path, state_remote):
+    """The mirror fetches what the page reads, not the models it never loads.
+
+    The registry database and the importance JSON have to arrive — the model card and
+    the importance chart are read from them. `model.lgb` must not, because it is the
+    entire reason a 355MB branch could not be cloned inside the timeout.
+    """
+    destination = tmp_path / "app"
+
+    result = mirror_state(destination, state_remote)
+
+    assert result.ok
+    assert (destination / "mlruns" / "mlflow.db").exists()
+    assert (destination / "mlruns" / "1" / "abc" / "artifacts" / "feature_importance.json").exists()
+    assert not list(destination.glob("mlruns/**/*.lgb"))
 
 
 def test_it_reports_which_snapshot_it_got(tmp_path, state_remote):

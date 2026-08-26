@@ -31,6 +31,25 @@ STATE_BRANCH = "pipeline-state"
 MIRRORED = ("state", "mlruns", "data/processed")
 CLONE_TIMEOUT_S = 120
 
+# What the dashboard actually opens, and nothing else. The branch carries the loop's whole
+# working state, which is dominated by the LightGBM boosters under `mlruns/1/models` — a
+# few hundred megabytes of them, because a 2000-round model is tens of megabytes and the
+# registry keeps every run the pruner has not yet reached. The dashboard never loads a
+# model: `load_model_card` reads the registry *database*, and the importance chart reads a
+# sub-kilobyte JSON. Cloning the boosters to render a page that ignores them cost the
+# whole mirror, because the transfer could not finish inside CLONE_TIMEOUT_S.
+#
+# `--filter=blob:none` skips the blob contents at transfer time and `sparse-checkout`
+# decides which ones are worth fetching back. A server that refuses the filter — the
+# default for a bare local remote, though not for GitHub — degrades to sending everything
+# and checking out the same narrow set, so the mirror still works, just slower.
+SPARSE_PATTERNS = (
+    "/state/**",
+    "/data/processed/**",
+    "/mlruns/mlflow.db",
+    "/mlruns/**/feature_importance.json",
+)
+
 
 @dataclass(frozen=True)
 class MirrorResult:
@@ -91,10 +110,15 @@ def mirror_state(destination: Path, repo_url: str | None = None) -> MirrorResult
                     "--branch",
                     STATE_BRANCH,
                     "--single-branch",
+                    "--filter=blob:none",
+                    "--sparse",
+                    "--no-checkout",
                     repo_url,
                     str(clone),
                 ]
             )
+            _run(["git", "-C", str(clone), "sparse-checkout", "set", "--no-cone", *SPARSE_PATTERNS])
+            _run(["git", "-C", str(clone), "checkout"])
             commit = _run(["git", "-C", str(clone), "rev-parse", "--short", "HEAD"])
             committed = _run(["git", "-C", str(clone), "log", "-1", "--format=%cI"])
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
