@@ -337,8 +337,15 @@ measures the plumbing and nothing else.
 ## Setup
 
 ```bash
-git clone https://github.com/tomeelow/load-forecasting.git && cd load-forecasting
+git clone --single-branch https://github.com/tomeelow/load-forecasting.git && cd load-forecasting
 ```
+
+`--single-branch` matters here. The project itself is about 1.6 MB, but the daily loop
+force-pushes its whole working state — the MLflow store included — to the
+`pipeline-state` branch of this same repository ([ADR-008](docs/ADR.md)), and a default
+clone fetches that too. It is the difference between a few seconds and a few hundred
+megabytes. Nothing in development reads that branch; the deployed dashboard clones it
+separately, filtered and sparse.
 
 ```bash
 uv sync && cp .env.example .env
@@ -353,12 +360,23 @@ The test suite needs **no network and no token** — that is enforced by
 the `.env` loader at a file that does not exist, rather than trusting the constraint.
 
 Those three commands were run against a fresh `git clone` of this repository on
-2026-08-21: **450 tests passed in 77 seconds**, with no token in the environment. The
+2026-08-26: **464 tests passed in 67 seconds**, with no token in the environment. The
 same three run in CI on every pull request
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 On macOS, LightGBM needs the OpenMP runtime, which is not a Python package:
 `brew install libomp`.
+
+If you intend to commit, install the hooks — the config in
+[`.pre-commit-config.yaml`](.pre-commit-config.yaml) does nothing until you do:
+
+```bash
+uv run pre-commit install
+```
+
+They run `ruff`, `ruff format` and the test suite, refuse a commit straight to `main`,
+and reject any file over 500 KB, because datasets and model binaries belong in MLflow
+rather than in git.
 
 Paste your ENTSO-E token into `.env`, then pull the history and serve:
 
@@ -501,13 +519,15 @@ pulls seven years from two APIs. Measured on the CI run that built the current d
 run the next morning. A failure part-way leaves nothing and starts over. Chunking the
 archive pull by year made timeouts survivable but did not make the rebuild resumable.
 
-**The loop has only recently started succeeding.** Every scheduled run from 2026-08-14
-to 2026-08-20 failed — a missing `setup-uv` tag, ENTSO-E read timeouts `entsoe-py` does
-not retry, an unchunked weather pull that timed out, and a first run with no state to
-bootstrap from. Each fix is a commit in the history. As of 2026-08-21 there have been two
-successful runs: one manual (21m 41s, including the full rebuild) and one scheduled
-(4m 16s). A week of green runs is what would make "operational" a fair word, and it has
-not happened yet.
+**The loop took a week to start succeeding.** Every scheduled run from 2026-08-14 to
+2026-08-20 failed — a missing `setup-uv` tag, ENTSO-E read timeouts `entsoe-py` does not
+retry, an unchunked weather pull that timed out, and a first run with no state to
+bootstrap from. Each fix is a commit in the history. Since then it has been green:
+**six consecutive scheduled runs, 2026-08-21 through 2026-08-26**, between 3m 33s and
+7m 04s each, every one of them ingesting, scoring, checking drift and serving the next
+day's forecast. That is the week of green runs this section previously said had not
+happened; it is still six days rather than six months, and nothing here has yet been
+tested against a January.
 
 **The backtest tunes once and freezes.** Hyperparameters are searched on the first
 origin's training block and reused at every later one ([ADR-007](docs/ADR.md)). It leaks
@@ -577,9 +597,10 @@ direct per-horizon forecasting over recursive, an MLflow registry plus a dataset
 hash over ad-hoc artifact files (and over DVC, which would need a remote nobody is
 paying for), Evidently over a hand-rolled drift check, indexing feature rows by target
 hour, embargoing one horizon between training and test blocks, tuning once per backtest
-rather than per origin, carrying pipeline state on a force-pushed orphan branch, and
+rather than per origin, carrying pipeline state on a force-pushed orphan branch,
 measuring drift against the same weeks in previous years rather than against last
-fortnight.
+fortnight, and scoring the benchmark at PSE's own lead time rather than at a flat 24
+hours — the last of which is what turned a claimed win into the loss reported above.
 
 Two documents sit alongside them:
 [`docs/evaluation_notes.md`](docs/evaluation_notes.md), the audit of whether the PSE

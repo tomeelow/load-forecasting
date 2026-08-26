@@ -360,7 +360,7 @@ def run(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit the PSE comparison for fairness.")
     parser.add_argument("--max-splits", type=int, default=13, help="number of origins")
-    parser.add_argument("--test-days", type=int, default=28, help="hours each origin predicts")
+    parser.add_argument("--test-days", type=int, default=28, help="days each origin predicts")
     parser.add_argument("--step-days", type=int, default=28, help="how far the origin moves")
     parser.add_argument("--horizon", type=int, default=24, help="the flat-horizon reference")
     parser.add_argument(

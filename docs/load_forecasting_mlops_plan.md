@@ -576,6 +576,14 @@ volumes:
 ```
 
 ### Deployment options (pick one)
+
+> **Settled, and one option has since changed price.** The dashboard is deployed to
+> Streamlit Community Cloud at <https://pl-load-forecast.streamlit.app>; see
+> `deploy/streamlit-cloud.md`. Hugging Face Spaces is no longer the zero-cost option this
+> list assumed — HF now bills the SDK rather than only the hardware, so Gradio and Docker
+> Spaces need PRO on a personal account. The rest of this section is left as it was
+> written, as a record of what was considered.
+
 - **Hugging Face Spaces (Docker SDK)** — zero cost, shareable link, high recruiter recognition. Cleanest for the *dashboard*; point it at a hosted API or bundle a lightweight inference path.
 - **Render / Railway / Fly.io free tiers** — can host the FastAPI service; mind that free instances sleep when idle.
 - **Azure free tier** — more setup overhead, but Azure is positive signal for Polish enterprise recruiters who use it. (As covered in our earlier discussion, watch free-tier limits so an always-on instance doesn't quietly start billing.)
