@@ -1,0 +1,12 @@
+checked_at,status,drift_share,drifted_features,monitored_features,drifted_names,reference_strategy,reference_rows,current_rows,rolling_mape,tso_mape,scored_predictions
+2026-08-22T05:53:01.612968+00:00,drift,0.7272727272727273,8,11,cloud_cover load_lag_168 load_lag_192 load_lag_24 load_lag_25 load_roll_mean_24 load_roll_std_24 wind_ms,seasonal,2016,335,,,0
+2026-08-23T05:54:44.766572+00:00,drift,0.6363636363636364,7,11,cloud_cover load_lag_192 load_lag_24 load_lag_25 load_lag_48 load_roll_mean_24 load_roll_std_24,seasonal,2016,335,,,24
+2026-08-24T06:03:55.058568+00:00,drift,0.8181818181818182,9,11,cloud_cover load_lag_24 load_lag_25 load_lag_48 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,335,,,48
+2026-08-25T05:58:38.327255+00:00,drift,0.8181818181818182,9,11,cloud_cover load_lag_24 load_lag_25 load_lag_48 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,336,,,72
+2026-08-26T06:02:27.568876+00:00,drift,0.8181818181818182,9,11,cloud_cover load_lag_24 load_lag_25 load_lag_48 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,334,,,95
+2026-08-27T16:38:51.129385+00:00,drift,0.9090909090909091,10,11,cloud_cover load_lag_168 load_lag_24 load_lag_25 load_lag_48 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,335,,,120
+2026-08-28T17:36:33.946751+00:00,drift,0.9090909090909091,10,11,load_lag_168 load_lag_192 load_lag_24 load_lag_25 load_lag_48 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,335,,,144
+2026-08-29T11:45:24.007345+00:00,drift,1.0,11,11,cloud_cover load_lag_168 load_lag_192 load_lag_24 load_lag_25 load_lag_48 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,333,,,160
+2026-08-30T10:38:04.990634+00:00,drift,1.0,11,11,cloud_cover load_lag_168 load_lag_192 load_lag_24 load_lag_25 load_lag_48 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,324,2.6927900649838135,2.987414308115058,182
+2026-09-04T09:51:26.548030+00:00,drift,0.6363636363636364,7,11,load_lag_168 load_lag_192 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,335,2.641625218192554,2.7406634542315027,216
+2026-09-05T09:13:45.421064+00:00,drift,0.6363636363636364,7,11,load_lag_168 load_lag_192 load_roll_mean_24 load_roll_std_24 temp_c temp_sq wind_ms,seasonal,2016,335,2.474048954282976,2.523558169775373,235
