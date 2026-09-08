@@ -598,7 +598,6 @@ tests/           leakage, DST, timezone, validation, retry, gate, loop, dashboar
 docs/            plan, ADR, evaluation audit, blog post, demo script
 docker/          the image both services are built from
 deploy/          Streamlit Community Cloud route, and the container one for Spaces
-packages.txt     apt packages for Community Cloud: the git the state mirror shells out to
 reports/         generated benchmark tables, plus the gzipped backtest the page plots
 monitoring/      generated drift reports (HTML, not versioned)
 state/           prediction log, drift history, last-success markers (ADR-008)
