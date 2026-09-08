@@ -31,9 +31,17 @@ FORECAST_COLUMN = "tso_forecast_mw"
 # So: a bounded timeout, and retries mounted on the session, where they apply to each
 # HTTP request entsoe-py makes rather than to the whole multi-year call. Retrying the
 # call would re-fetch every year to recover one.
+#
+# The budget is sized for a 503, not for a timeout. The Transparency Platform answers
+# 503 while it is busy or briefly down, and it is the only source of both the target and
+# the benchmark — nothing downstream runs without it. Three scheduled runs in a row died
+# that way (2026-08-31 to 09-02) because four attempts spread over ~30s all landed
+# inside the same outage. Five retries reach ~150s, which costs a healthy run nothing
+# and rides out the short ones. An outage longer than that still fails the job loudly;
+# the next run backfills from the last-success marker rather than skipping the window.
 REQUEST_TIMEOUT_S = 120
-RETRY_COUNT = 3
-RETRY_BACKOFF_S = 5  # urllib3 doubles this per attempt: ~0s, 10s, 20s
+RETRY_COUNT = 5
+RETRY_BACKOFF_S = 5  # urllib3 doubles this per attempt: ~0s, 10s, 20s, 40s, 80s
 RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 
 
