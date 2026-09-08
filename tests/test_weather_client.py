@@ -132,6 +132,14 @@ def http_response(status: int, body: dict | None = None, headers: dict | None = 
     return response
 
 
+def non_json_response(status: int = 200, body: str = "<html>502 Bad Gateway</html>"):
+    """A 2xx whose body never came from Open-Meteo — a proxy answering on its behalf."""
+    response = requests.Response()
+    response.status_code = status
+    response._content = body.encode()
+    return response
+
+
 def policy(**overrides) -> RequestConfig:
     settings = {"timeout_s": 30.0, "max_attempts": 5, "backoff_s": 1.0, "backoff_max_s": 30.0}
     return RequestConfig(**{**settings, **overrides})
@@ -210,6 +218,29 @@ def test_a_rate_limit_waits_as_long_as_the_server_asked(http):
     weather_client._get("https://example/api", {}, policy())
 
     assert sleeps == [7.0]  # the server's own number, not our backoff curve
+
+
+def test_a_body_that_is_not_json_is_retried(http):
+    """The failure that ended the scheduled run of 2026-09-03.
+
+    It arrives past `raise_for_status`, so it is not an HTTPError and was raised on the
+    first attempt while every other transient failure got five.
+    """
+    calls, sleeps = http(non_json_response(), http_response(200, GOOD_BODY))
+
+    assert weather_client._get("https://example/api", {}, policy()) == GOOD_BODY
+    assert len(calls) == 2
+    assert sleeps == [1.0]
+
+
+def test_a_body_that_is_never_json_still_fails_in_the_end(http):
+    """Retried, not swallowed: ingestion must not carry on without the weather."""
+    calls, _ = http(*[non_json_response()] * 3)
+
+    with pytest.raises(requests.exceptions.JSONDecodeError):
+        weather_client._get("https://example/api", {}, policy(max_attempts=3))
+
+    assert len(calls) == 3
 
 
 def test_a_malformed_request_is_not_retried(http):

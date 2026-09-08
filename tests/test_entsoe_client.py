@@ -180,6 +180,23 @@ def test_the_client_retries_read_timeouts_entsoe_py_does_not():
     assert retries.backoff_factor > 0, "retries without backoff hammer a busy server"
 
 
+def test_the_retry_budget_outlasts_a_short_platform_outage():
+    """Three scheduled runs in a row died on a 503 the old ~30s budget sat right inside.
+
+    The Transparency Platform carries both the target and the benchmark, so a 503 there
+    ends the whole daily loop. urllib3 sleeps `backoff_factor * 2 ** (n - 1)` before
+    retry `n` and skips the pause before the first, which is the sum reproduced here.
+    """
+    client = make_client(api_key="not-a-real-token")
+    retries = client.session.get_adapter("https://web-api.tp.entsoe.eu").max_retries
+
+    assert 503 in retries.status_forcelist
+    budget = sum(
+        0 if n <= 1 else retries.backoff_factor * 2 ** (n - 1) for n in range(1, retries.total + 1)
+    )
+    assert budget >= 120, "a 503 lasting two minutes must not end the daily loop"
+
+
 def test_the_client_cannot_hang_for_ever():
     """No timeout at all was the original defect: the job dies on the workflow clock."""
     client = make_client(api_key="not-a-real-token")

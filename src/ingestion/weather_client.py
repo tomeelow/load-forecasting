@@ -34,7 +34,8 @@ COLUMN_NAMES = {
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 # Transport failures that are, by nature, worth another attempt: the connection never
-# opened, the response never finished, or it took too long.
+# opened, the response never finished, or it took too long. A body that fails to parse
+# is retried too, but separately — see `_get`.
 RETRYABLE_ERRORS = (
     requests.ConnectionError,
     requests.Timeout,
@@ -108,6 +109,15 @@ def _get(url: str, params: dict, request: RequestConfig) -> dict:
             last = exc
             pause = _retry_after(exc) or pause
         except RETRYABLE_ERRORS as exc:
+            last = exc
+        except requests.exceptions.JSONDecodeError as exc:
+            # A 2xx whose body is not JSON: an HTML error page or a truncated response
+            # from whatever sits in front of Open-Meteo. As transient as a 502, but it
+            # arrives past `raise_for_status` and so used to be raised on the first
+            # attempt — which is what ended the scheduled run of 2026-09-03. The parse
+            # error names only the character it choked on, so log what actually came
+            # back or the next occurrence is just as unreadable.
+            logger.warning("Open-Meteo {} answered with a non-JSON body: {!r}", url, exc.doc[:200])
             last = exc
 
         if attempt == request.max_attempts:
