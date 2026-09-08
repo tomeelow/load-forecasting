@@ -57,9 +57,16 @@ its root — so the environment matches the lockfile the CI and the containers u
 there is no second list of pinned versions to drift out of step. Do not add a
 `requirements.txt`: only the first file found is used, and it would silently win.
 
-`packages.txt` asks apt for `git`, which `mirror_state` shells out to. It is one line and
-carries no comment, because every line in that file is passed to `apt-get` and a `#` would
-be read as a package name.
+**There is no `packages.txt`, and adding one back will break the build.** Its presence is
+what makes Community Cloud run `apt-get`, and that step now fails before it installs
+anything: the image's sources still list Debian `bullseye-security`, whose `Release` file
+has expired, so `apt-get update` exits non-zero and the host reports *Error installing
+requirements* without ever reaching the dependency install. Nothing in the file causes
+this — an empty-but-present file would fail identically. The repository carried one asking
+for `git`, which is what `mirror_state` shells out to; that was unnecessary, because the
+image already has git — it is what clones this repository into `/mount/src` at startup.
+Were git ever absent, `mirror_state` catches the `OSError` and the page says it could not
+mirror rather than crashing.
 
 ## Why the page still has data
 
