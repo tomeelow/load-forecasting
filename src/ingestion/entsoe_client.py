@@ -42,7 +42,20 @@ FORECAST_COLUMN = "tso_forecast_mw"
 REQUEST_TIMEOUT_S = 120
 RETRY_COUNT = 5
 RETRY_BACKOFF_S = 5  # urllib3 doubles this per attempt: ~0s, 10s, 20s, 40s, 80s
-RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+
+# Any 5xx, not a list of the ones we have already met. Enumerating them is how the next
+# outage gets through: the list held 500/502/503/504 when the platform answered 599 on
+# 2026-09-09 — a proxy's connect-timeout code, in no registry — and an unlisted status is
+# not retried at all, so the run died on the first attempt. A 5xx is the server saying it
+# failed, which is worth another attempt whatever number it puts on it; the identical
+# request returned 200 and 174KB of load data when it was replayed by hand.
+#
+# 4xx stays a whitelist, because there it really is the request that is wrong. 429 is the
+# exception that describes a condition rather than a mistake. 404 is deliberately absent:
+# ENTSO-E answers one for a window it has no data for, entsoe-py turns that into
+# NoMatchingDataError and `_query` handles it, and retrying here would burn the whole
+# budget on a question that has already been answered.
+RETRYABLE_STATUS = (429, *range(500, 600))
 
 
 def _retrying_session() -> requests.Session:

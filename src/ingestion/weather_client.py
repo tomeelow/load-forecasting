@@ -31,7 +31,12 @@ COLUMN_NAMES = {
 # Statuses worth trying again: a timeout, a rate limit, or a server that is briefly
 # unwell. Everything else in 4xx says the request itself is wrong, and repeating a
 # malformed request five times only delays the error by a minute.
-RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+#
+# The 5xx half is a range rather than a list for the reason ENTSO-E demonstrated on
+# 2026-09-09: a CDN in front of an API invents status codes — 599, or Cloudflare's
+# 520-527 — and a list of the ones already seen does not contain the next one, so it is
+# raised on the first attempt instead of retried.
+RETRYABLE_STATUS = frozenset({408, 425, 429, *range(500, 600)})
 
 # Transport failures that are, by nature, worth another attempt: the connection never
 # opened, the response never finished, or it took too long. A body that fails to parse

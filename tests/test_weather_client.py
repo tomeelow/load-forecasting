@@ -201,6 +201,17 @@ def test_a_server_error_is_retried(http):
     assert len(calls) == 2
 
 
+def test_a_server_error_outside_the_registry_is_retried_too(http):
+    """A CDN in front of an API invents its own 5xx — 599, or Cloudflare's 520-527.
+
+    Listing the codes already seen is what let ENTSO-E's 599 end a run unretried.
+    """
+    calls, _ = http(http_response(599), http_response(200, GOOD_BODY))
+
+    assert weather_client._get("https://example/api", {}, policy()) == GOOD_BODY
+    assert len(calls) == 2
+
+
 def test_backoff_doubles_and_stops_at_the_ceiling(http):
     failures = [requests.Timeout("slow")] * 4
     _, sleeps = http(*failures, http_response(200, GOOD_BODY))

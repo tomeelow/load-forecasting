@@ -197,6 +197,27 @@ def test_the_retry_budget_outlasts_a_short_platform_outage():
     assert budget >= 120, "a 503 lasting two minutes must not end the daily loop"
 
 
+def test_any_server_error_is_retried_whatever_number_it_carries():
+    """599 ended the run of 2026-09-09 and was never retried: it was not on the list.
+
+    The platform sits behind a proxy that answers with codes outside the registry when
+    it gives up. Replayed by hand minutes later the identical request returned 200 and
+    174KB of load data, so the request was never the problem — the list was.
+    """
+    client = make_client(api_key="not-a-real-token")
+    forcelist = set(
+        client.session.get_adapter("https://web-api.tp.entsoe.eu").max_retries.status_forcelist
+    )
+
+    assert {500, 502, 503, 504, 599} <= forcelist
+    assert 429 in forcelist, "a rate limit is a condition, not a malformed request"
+    assert not forcelist & {400, 401, 403}, "repeating a bad request only delays the error"
+    assert 404 not in forcelist, (
+        "ENTSO-E answers 404 for a window it has no data for; entsoe-py turns that into "
+        "NoMatchingDataError and _query handles it, so retrying re-asks a settled question"
+    )
+
+
 def test_the_client_cannot_hang_for_ever():
     """No timeout at all was the original defect: the job dies on the workflow clock."""
     client = make_client(api_key="not-a-real-token")
