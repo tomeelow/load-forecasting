@@ -416,6 +416,121 @@ class TestFiguresOnThinData:
         assert {trace.name for trace in figure.data} == {"Model forecast"}
 
 
+class TestTheChartDoesNotDrawForecastsNobodyMade:
+    """A day the loop did not run is a hole in the log, and Plotly bridges holes.
+
+    The bridge is a straight line labelled "Model forecast" lying across hours the model
+    was never asked about — and the actuals for those hours are on the same axis, so it
+    reads as a day the model got badly wrong rather than a day it was silent.
+    """
+
+    @staticmethod
+    def served_with_a_missing_day() -> pd.DataFrame:
+        """Two runs a day apart, with the hours between them never forecast."""
+        before = pd.date_range("2026-09-08 06:00", periods=4, freq="h", tz="UTC")
+        after = pd.date_range("2026-09-09 11:00", periods=4, freq="h", tz="UTC")
+        index = before.append(after)
+        return pd.DataFrame(
+            {
+                "load_mw": [19_400.0] * 4 + [19_950.0] * 4,
+                "p10": [18_600.0] * 4 + [19_400.0] * 4,
+                "p90": [20_000.0] * 4 + [20_600.0] * 4,
+            },
+            index=index,
+        )
+
+    @staticmethod
+    def spans(figure, name: str) -> list[tuple]:
+        """The (first, last) x of every trace drawn under `name`."""
+        return [(t.x[0], t.x[-1]) for t in figure.data if t.name == name]
+
+    def test_the_silent_hours_carry_no_forecast_line(self):
+        from src.dashboard.figures import forecast_figure
+
+        figure = forecast_figure(pd.DataFrame(), self.served_with_a_missing_day(), "UTC")
+
+        spans = self.spans(figure, "Model forecast")
+        assert len(spans) == 2, "each run of forecast hours is its own trace"
+        assert spans[0][1] == pd.Timestamp("2026-09-08 09:00", tz="UTC")
+        assert spans[1][0] == pd.Timestamp("2026-09-09 11:00", tz="UTC")
+
+    def test_the_band_stops_where_the_line_does(self):
+        """A `tonexty` fill ignores nulls, so the band needs splitting too, not just NaN."""
+        from src.dashboard.figures import forecast_figure
+
+        figure = forecast_figure(pd.DataFrame(), self.served_with_a_missing_day(), "UTC")
+
+        assert self.spans(figure, "P10–P90") == self.spans(figure, "Model forecast")
+
+    def test_the_split_series_still_reads_as_one_thing_in_the_legend(self):
+        from src.dashboard.figures import forecast_figure
+
+        figure = forecast_figure(pd.DataFrame(), self.served_with_a_missing_day(), "UTC")
+
+        # `showlegend` is None when it was never set, which Plotly renders as shown.
+        legend = [trace.name for trace in figure.data if trace.showlegend is not False]
+        assert sorted(legend) == ["Model forecast", "P10–P90"]
+
+    def test_a_run_clipped_to_a_single_hour_still_renders(self):
+        """The window cutoff lands inside an old run, and Plotly draws no line for one point."""
+        from src.dashboard.figures import forecast_figure
+
+        served = self.served_with_a_missing_day().iloc[3:]
+
+        figure = forecast_figure(pd.DataFrame(), served, "UTC")
+        lone = next(t for t in figure.data if t.name == "Model forecast" and len(t.x) == 1)
+
+        assert lone.mode == "lines+markers", "a lone hour needs a marker to be visible"
+
+    def test_the_band_never_dots_its_points(self):
+        """The band traces are fill scaffolding; markers on them are three stray dots."""
+        from src.dashboard.figures import forecast_figure
+
+        served = self.served_with_a_missing_day().iloc[3:]
+
+        figure = forecast_figure(pd.DataFrame(), served, "UTC")
+        band = [t for t in figure.data if t.name in {"P90", "P10–P90"}]
+
+        assert band, "the fixture has quantiles, so the band must be drawn"
+        assert all(t.mode == "lines" for t in band)
+
+    def test_the_autumn_fold_is_not_mistaken_for_a_gap(self):
+        """Warsaw repeats 02:00 in October, so local hours are the wrong thing to split on.
+
+        Splitting the series on the displayed local index would see a zero-hour step at
+        the fold and a two-hour step in spring, and perforate a forecast that never
+        stopped. The runs come off the UTC index; only the axis is local.
+        """
+        from src.dashboard.figures import forecast_figure
+
+        # 2026-10-25 01:00 UTC is the Europe/Warsaw fold: 03:00 local becomes 02:00.
+        index = pd.date_range("2026-10-24 22:00", periods=6, freq="h", tz="UTC")
+        served = pd.DataFrame(
+            {"load_mw": [18_000.0] * 6, "p10": [17_500.0] * 6, "p90": [18_500.0] * 6},
+            index=index,
+        )
+
+        figure = forecast_figure(pd.DataFrame(), served, "Europe/Warsaw")
+
+        drawn = [t.x for t in figure.data if t.name == "Model forecast"]
+        assert len(drawn) == 1, "an unbroken forecast must stay one trace across the fold"
+        # Plotly keeps the local wall time, which is where the repeated 02:00 shows up.
+        assert pd.DatetimeIndex(drawn[0]).hour.tolist() == [0, 1, 2, 2, 3, 4]
+
+    def test_a_contiguous_forecast_is_drawn_whole(self):
+        """The fix must not perforate a series that has no holes in it."""
+        from src.dashboard.figures import forecast_figure
+
+        served = pd.DataFrame(
+            {"load_mw": [20_000.0] * 24, "p10": [19_200.0] * 24, "p90": [20_800.0] * 24},
+            index=pd.date_range("2026-09-10", periods=24, freq="h", tz="UTC"),
+        )
+
+        figure = forecast_figure(pd.DataFrame(), served, "UTC")
+
+        assert len(self.spans(figure, "Model forecast")) == 1
+
+
 class TestMirroredArtifacts:
     """MLflow records absolute artifact paths, which a copied store cannot honour.
 

@@ -55,31 +55,49 @@ def forecast_figure(actuals: pd.DataFrame, served: pd.DataFrame, tz: str) -> go.
             )
 
     if not served.empty:
-        local = served.index.tz_convert(tz)
-        if served[["p10", "p90"]].notna().all(axis=None):
-            figure.add_trace(
-                go.Scatter(
-                    x=local, y=served["p90"], line={"width": 0}, showlegend=False, name="P90"
+        banded = served[["p10", "p90"]].notna().all(axis=None)
+        for index, run in enumerate(_unbroken_runs(served)):
+            local = run.index.tz_convert(tz)
+            if banded:
+                figure.add_trace(
+                    go.Scatter(
+                        x=local,
+                        y=run["p90"],
+                        mode="lines",
+                        line={"width": 0},
+                        showlegend=False,
+                        name="P90",
+                    )
                 )
-            )
+                figure.add_trace(
+                    go.Scatter(
+                        x=local,
+                        y=run["p10"],
+                        mode="lines",
+                        fill="tonexty",
+                        fillcolor=BAND_COLOUR,
+                        line={"width": 0},
+                        name="P10–P90",
+                        legendgroup="band",
+                        showlegend=index == 0,
+                    )
+                )
             figure.add_trace(
                 go.Scatter(
                     x=local,
-                    y=served["p10"],
-                    fill="tonexty",
-                    fillcolor=BAND_COLOUR,
-                    line={"width": 0},
-                    name="P10–P90",
+                    y=run["load_mw"],
+                    # Plotly picks `lines+markers` for a short trace, which dots every
+                    # hour of a run and — for a run the window clipped down to one hour —
+                    # is the only thing that renders at all. Pin lines, and give a lone
+                    # hour the marker it needs to exist on the chart.
+                    mode="lines+markers" if len(run) == 1 else "lines",
+                    name="Model forecast",
+                    line={"color": MODEL_COLOUR, "width": 2.5},
+                    marker={"color": MODEL_COLOUR, "size": 5},
+                    legendgroup="model",
+                    showlegend=index == 0,
                 )
             )
-        figure.add_trace(
-            go.Scatter(
-                x=local,
-                y=served["load_mw"],
-                name="Model forecast",
-                line={"color": MODEL_COLOUR, "width": 2.5},
-            )
-        )
 
     figure.update_layout(
         template=TEMPLATE,
@@ -91,6 +109,23 @@ def forecast_figure(actuals: pd.DataFrame, served: pd.DataFrame, tz: str) -> go.
         legend={"orientation": "h", "y": 1.12, "x": 0},
     )
     return figure
+
+
+def _unbroken_runs(served: pd.DataFrame) -> list[pd.DataFrame]:
+    """The served forecast split at every hour the loop did not forecast.
+
+    Hours nobody forecast — a failed run, a paused schedule — are *absent* from the
+    prediction log rather than null in it, so a single trace hands Plotly two points a
+    day apart and it joins them with a straight line: a forecast nobody made, drawn over
+    hours whose actuals sit on the same axis to be compared against it.
+
+    One trace per run rather than one trace with nulls punched into it, because the two
+    are only equivalent for the line. Plotly does break a line at a null, but a `tonexty`
+    band drops nulls before building its polygon and fills clean across the hole
+    regardless — so nulls alone leave the gap bridged by a shaded wedge.
+    """
+    breaks = served.index.to_series().diff().ne(pd.Timedelta(hours=1)).cumsum()
+    return [run for _, run in served.groupby(breaks)]
 
 
 def rolling_error_figure(rolling: pd.DataFrame, tz: str) -> go.Figure:
