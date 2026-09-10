@@ -131,6 +131,36 @@ def test_monitoring_sees_only_the_forecast_that_stood(log):
     assert latest.iloc[0]["load_mw"] == pytest.approx(20_400.0)
 
 
+def test_a_promoted_champion_supersedes_the_outgoing_one_on_shared_hours(log):
+    """A retrain lands mid-window, and both models have forecast the hours it overlaps.
+
+    Only one of them served: the newer run replaced the older forecast for those hours.
+    Keeping a row for each would double-count them — two points on one hour of the chart,
+    and the superseded model's error folded into production MAPE beside the model that
+    actually stood.
+    """
+    log.log([record(load_mw=20_000.0, version="16", made_at=MADE_AT)])
+    log.log([record(load_mw=20_400.0, version="17", made_at=MADE_AT + pd.Timedelta(hours=1))])
+
+    latest = log.latest_per_target()
+
+    assert len(latest) == 1
+    assert latest.iloc[0]["load_mw"] == pytest.approx(20_400.0)
+    assert latest.iloc[0]["model_version"] == "17"
+
+
+def test_scoring_credits_only_the_forecast_that_stood(log):
+    """The same rule downstream: served MAPE must not average in a superseded forecast."""
+    log.log([record(load_mw=20_000.0, version="16", made_at=MADE_AT)])
+    log.log([record(load_mw=20_400.0, version="17", made_at=MADE_AT + pd.Timedelta(hours=1))])
+    log.score(actuals(load_mw=20_500.0))
+
+    scored = log.scored()
+
+    assert len(scored) == 1
+    assert scored.iloc[0]["abs_error_mw"] == pytest.approx(100.0)
+
+
 def test_predictions_are_scored_against_actuals(log):
     log.log([record(load_mw=20_000.0)])
 

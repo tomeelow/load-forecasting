@@ -238,10 +238,16 @@ class PredictionLog:
         return frame.set_index("target_time").sort_index()
 
     def latest_per_target(self, **kwargs) -> pd.DataFrame:
-        """One row per target hour: the most recent forecast made for it.
+        """One row per target hour and horizon: the most recent forecast made for it.
 
         Rolling error is a statement about the forecast that stood, not about how many
         times a client happened to ask for it.
+
+        Deliberately not keyed on `model_version`. A retrain that promotes a new champion
+        leaves the outgoing one's forecasts standing for the hours both covered, and
+        keying on the version would keep a row for each — two points on one hour of the
+        chart, and the superseded model's error averaged into production MAPE beside the
+        one that actually served.
         """
         frame = self.read(**kwargs)
         if frame.empty:
@@ -249,7 +255,7 @@ class PredictionLog:
         return (
             frame.reset_index()
             .sort_values("predicted_at")
-            .drop_duplicates(subset=["target_time", "horizon_hours", "model_version"], keep="last")
+            .drop_duplicates(subset=["target_time", "horizon_hours"], keep="last")
             .set_index("target_time")
             .sort_index()
         )
@@ -351,9 +357,7 @@ class PredictionLog:
             shaped = (
                 shaped.reset_index()
                 .sort_values("predicted_at")
-                .drop_duplicates(
-                    subset=["target_time", "horizon_hours", "model_version"], keep="last"
-                )
+                .drop_duplicates(subset=["target_time", "horizon_hours"], keep="last")
                 .set_index("target_time")
                 .sort_index()
             )
