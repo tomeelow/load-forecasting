@@ -4,7 +4,15 @@ Hourly forecasts of how much electricity Poland will use tomorrow, benchmarked a
 the grid operator's own published forecast.
 
 **[Live dashboard →](https://pl-load-forecast.streamlit.app)** — what the pipeline
-recorded on its last run, refreshed hourly from the state branch.
+recorded on its last run, refreshed hourly from the state branch. Three panels on it are
+there to be used rather than read: re-run the champion with the forecast temperature
+shifted, cut the audited backtest by season, day type and hour, and see which days the
+served forecast beat PSE's.
+
+**[Latest forecast as JSON →](https://raw.githubusercontent.com/tomeelow/load-forecasting/pipeline-state/state/latest_forecast.json)**
+— the hours the daily loop last forecast, with the P10–P90 band and PSE's own figure
+where PSE has published one. A file on the state branch, rewritten once a day, because a
+day-ahead forecast is made once a day and needs no server to hand it out.
 
 Poland's transmission system operator, **PSE**, has to decide a day in advance how much
 generation to schedule. Too little and the system buys expensive balancing energy at

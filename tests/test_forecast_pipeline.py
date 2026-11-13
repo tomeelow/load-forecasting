@@ -13,6 +13,7 @@ database.
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pandas as pd
 import pytest
@@ -238,3 +239,42 @@ def test_the_summary_names_the_model_and_the_window(forecast_cfg, tmp_path, serv
     text = summary.format()
     assert "pl_load_lgbm/7" in text
     assert "deadbeef1234" in text
+
+
+def test_a_run_publishes_the_forecast_it_logged(forecast_cfg, tmp_path, served):
+    log = PredictionLog(tmp_path / "p.db")
+
+    summary = forecast.run(forecast_cfg, log=log, state=PipelineState(tmp_path / "s.json"))
+
+    published = json.loads(forecast_cfg.state.latest_forecast_path.read_text())
+    assert published["model"] == "pl_load_lgbm/7"
+    assert published["dataset_version"] == "deadbeef1234"
+    assert len(published["hours"]) == summary.logged
+    first = published["hours"][0]
+    assert pd.Timestamp(first["target_time_utc"]) == summary.first_target
+    assert (first["load_mw"], first["p10_mw"], first["p90_mw"]) == (20000.0, 19000.0, 21000.0)
+
+
+def test_the_published_forecast_carries_pse_only_where_pse_has_published(
+    forecast_cfg, tmp_path, served
+):
+    """Tomorrow's PSE forecast is not in the synthetic history, and must not be invented."""
+    forecast.run(
+        forecast_cfg, log=PredictionLog(tmp_path / "p.db"), state=PipelineState(tmp_path / "s.json")
+    )
+
+    published = json.loads(forecast_cfg.state.latest_forecast_path.read_text())
+    assert all(hour["pse_forecast_mw"] is None for hour in published["hours"])
+
+
+def test_nothing_is_published_when_nothing_was_forecast(forecast_cfg, tmp_path, monkeypatch):
+    def empty_registry(_):
+        raise RuntimeError("no champion")
+
+    monkeypatch.setattr(forecast, "load_champion", empty_registry)
+
+    forecast.run(
+        forecast_cfg, log=PredictionLog(tmp_path / "p.db"), state=PipelineState(tmp_path / "s.json")
+    )
+
+    assert not forecast_cfg.state.latest_forecast_path.exists()

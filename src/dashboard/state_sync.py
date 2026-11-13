@@ -8,8 +8,9 @@ artifacts the loop writes, one clone behind, instead of showing empty panels or 
 a demo dataset baked into the image at build time and quietly ageing.
 
 **What this is not.** It is not a substitute for the API. The hosted page shows what the
-system recorded; it does not serve fresh forecasts, because serving needs a live weather
-call and a model in memory. The page says so rather than implying otherwise.
+system recorded; it does not serve fresh forecasts. It does carry the champion's booster,
+for the what-if panel, which re-runs it on weather the loop already ingested and logs
+nothing. The page says so rather than implying otherwise.
 
 Enabled by setting `STATE_REPO_URL`. Unset — which is every local run — this module does
 nothing at all, and the dashboard reads the working tree as usual.
@@ -19,8 +20,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,10 +37,12 @@ CLONE_TIMEOUT_S = 120
 # What the dashboard actually opens, and nothing else. The branch carries the loop's whole
 # working state, which is dominated by the LightGBM boosters under `mlruns/1/models` — a
 # few hundred megabytes of them, because a 2000-round model is tens of megabytes and the
-# registry keeps every run the pruner has not yet reached. The dashboard never loads a
-# model: `load_model_card` reads the registry *database*, and the importance chart reads a
-# sub-kilobyte JSON. Cloning the boosters to render a page that ignores them cost the
-# whole mirror, because the transfer could not finish inside CLONE_TIMEOUT_S.
+# registry keeps every run the pruner has not yet reached. The dashboard opens exactly one
+# of them, the champion's, for the what-if panel; everything else it shows comes from the
+# registry *database* and a sub-kilobyte importance JSON. Cloning every booster to render
+# a page that ignores all but one cost the whole mirror, because the transfer could not
+# finish inside CLONE_TIMEOUT_S. So the first checkout takes none, and the champion's is
+# added once the database it arrived with says which one that is.
 #
 # `--filter=blob:none` skips the blob contents at transfer time and `sparse-checkout`
 # decides which ones are worth fetching back. A server that refuses the filter — the
@@ -87,6 +92,29 @@ def _run(command: list[str], cwd: Path | None = None) -> str:
     ).stdout.strip()
 
 
+def _aliased_boosters(database: Path) -> list[str]:
+    """Sparse patterns for the boosters a registry alias points at — the champion's.
+
+    Read straight from the registry database rather than through MLflow, which would be
+    a heavy import to answer one join. An unreadable database yields nothing, and the
+    what-if panel then says the champion is not on disk.
+    """
+    try:
+        with closing(sqlite3.connect(database)) as connection:
+            sources = connection.execute(
+                """SELECT v.source FROM registered_model_aliases a
+                   JOIN model_versions v ON v.name = a.name AND v.version = a.version"""
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Could not read aliases from {}: {}", database, exc)
+        return []
+    return [
+        f"/mlruns/*/models/{source.removeprefix('models:/')}/artifacts/model.lgb"
+        for (source,) in sources
+        if source
+    ]
+
+
 def mirror_state(destination: Path, repo_url: str | None = None) -> MirrorResult:
     """Shallow-clone the state branch and copy its paths over `destination`.
 
@@ -125,6 +153,15 @@ def mirror_state(destination: Path, repo_url: str | None = None) -> MirrorResult
             detail = getattr(exc, "stderr", None) or str(exc)
             logger.warning("Could not mirror {}: {}", repo_url, detail)
             return MirrorResult(enabled=True, ok=False, error=str(detail).strip()[:200])
+
+        # Its own step, and allowed to fail: one panel going without its model is not a
+        # reason to throw away a mirror that everything else on the page can use.
+        boosters = _aliased_boosters(clone / "mlruns" / "mlflow.db")
+        if boosters:
+            try:
+                _run(["git", "-C", str(clone), "sparse-checkout", "add", *boosters])
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+                logger.warning("Could not fetch the champion's booster: {}", exc)
 
         copied = []
         for relative in MIRRORED:

@@ -582,3 +582,151 @@ class TestMirroredArtifacts:
         importance = data._load_importance("file:///gone", "abc123", "http://mlflow:5000")
 
         assert importance.empty
+
+
+class TestExplorer:
+    """A visitor's cut of the backtest has to stay a fair comparison, whatever they pick."""
+
+    TZ = "Europe/Warsaw"
+    PEAK = (7, 22)
+
+    @pytest.fixture
+    def backtest(self, populated_cfg, dataset):
+        backtest_csv(populated_cfg, dataset)
+        return data.load_backtest(populated_cfg)
+
+    def test_no_filter_keeps_every_hour(self, backtest):
+        selection = backtest.select({}, tz=self.TZ, peak_hours=self.PEAK)
+
+        assert len(selection.predictions) == len(backtest.predictions)
+
+    def test_a_segment_filter_keeps_only_that_segment(self, backtest):
+        selection = backtest.select({"daytype": ["weekend"]}, tz=self.TZ, peak_hours=self.PEAK)
+
+        local = selection.predictions.index.tz_convert(self.TZ)
+        assert len(selection.predictions) > 0
+        assert (local.dayofweek >= 5).all()
+
+    def test_filters_combine_rather_than_replace_each_other(self, backtest):
+        weekend = backtest.select({"daytype": ["weekend"]}, tz=self.TZ, peak_hours=self.PEAK)
+        both = backtest.select(
+            {"daytype": ["weekend"], "period": ["peak"]}, tz=self.TZ, peak_hours=self.PEAK
+        )
+
+        assert 0 < len(both.predictions) < len(weekend.predictions)
+
+    def test_dates_are_local_and_inclusive(self, backtest):
+        """23:00 UTC on the 9th is already the 10th in Warsaw, and belongs to the 10th."""
+        day = pd.Timestamp("2024-02-10").date()
+
+        selection = backtest.select({}, tz=self.TZ, peak_hours=self.PEAK, start=day, end=day)
+
+        assert len(selection.predictions) == 24
+        assert selection.predictions.index.min() == pd.Timestamp("2024-02-09 23:00", tz="UTC")
+
+    def test_the_model_and_pse_are_scored_on_the_same_selected_hours(self, backtest):
+        selection = backtest.select({"season": ["winter"]}, tz=self.TZ, peak_hours=self.PEAK)
+
+        overall = selection.overall()
+
+        assert overall.loc[data.BACKTEST_MODEL, "mape"] == pytest.approx(1.0)
+        assert overall.loc[TSO_FORECAST, "mape"] == pytest.approx(3.0)
+
+    def test_a_selection_matching_nothing_is_empty_not_an_error(self, backtest):
+        selection = backtest.select({"season": ["summer"]}, tz=self.TZ, peak_hours=self.PEAK)
+
+        assert selection.predictions.empty
+
+    def test_hourly_error_covers_each_local_hour_once(self, backtest):
+        hourly = backtest.hourly_mape(self.TZ)
+
+        assert list(hourly.index) == list(range(24))
+        assert (hourly["model"] < hourly["PSE"]).all()
+
+
+class TestDailyScoreboard:
+    """A day is called once, on all of its hours, with both forecasts on the same ones."""
+
+    TZ = "Europe/Warsaw"
+
+    def test_nothing_scored_is_an_empty_board(self, populated_cfg):
+        daily = data.load_served_performance(populated_cfg).daily(self.TZ)
+
+        assert daily.empty
+
+    def test_only_complete_local_days_are_called(self, populated_cfg, dataset):
+        """The first and last days of a logged window are partial, and stay off the board."""
+        log = log_served(populated_cfg, dataset, hours=60)
+        log.score(dataset)
+
+        daily = data.load_served_performance(populated_cfg).daily(self.TZ)
+
+        assert [str(day) for day in daily.index] == ["2024-02-28", "2024-02-29"]
+        assert (daily["hours"] == 24).all()
+
+    def test_the_gap_is_the_model_minus_pse_on_that_day(self, populated_cfg, dataset):
+        log = log_served(populated_cfg, dataset, hours=100, error=0.02)
+        log.score(dataset)
+
+        daily = data.load_served_performance(populated_cfg).daily(self.TZ)
+
+        assert daily["model_mape"].tolist() == pytest.approx([2.0] * len(daily), abs=1e-6)
+        assert (daily["gap"] == daily["model_mape"] - daily["pse_mape"]).all()
+
+    def test_hours_without_a_pse_forecast_do_not_count_towards_a_day(self, populated_cfg, dataset):
+        log = log_served(populated_cfg, dataset, hours=60)
+        holed = dataset.copy()
+        holed.loc[holed.index[-30:], "tso_forecast_mw"] = float("nan")
+        log.score(holed)
+
+        daily = data.load_served_performance(populated_cfg).daily(self.TZ)
+
+        assert daily.empty
+
+
+class StubBooster:
+    """Demand falls 100 MW per degree, so a temperature shift is visible in the output."""
+
+    def feature_name(self) -> list[str]:
+        return ["temp_c"]
+
+    def predict(self, X: pd.DataFrame):
+        return (20000 - 100 * X["temp_c"]).to_numpy()
+
+
+class TestWhatIf:
+    HORIZON = 24
+
+    @pytest.fixture
+    def what_if(self, dataset):
+        """History whose last day has weather but no actuals yet — what serving sees."""
+        history = dataset.copy()
+        history.loc[history.index[-self.HORIZON :], "load_mw"] = float("nan")
+        return data.WhatIf(booster=StubBooster(), horizon=self.HORIZON, history=history)
+
+    def test_an_empty_registry_leaves_nothing_to_play_with(self, populated_cfg):
+        what_if = data.load_what_if(populated_cfg)
+
+        assert not what_if.available
+        assert what_if.error
+
+    def test_it_forecasts_the_hours_after_the_last_actual(self, what_if, cfg):
+        baseline = what_if.forecast(cfg)
+
+        latest = what_if.history["load_mw"].last_valid_index()
+        assert len(baseline) == self.HORIZON
+        assert baseline.index.min() == latest + pd.Timedelta(hours=1)
+
+    def test_the_shift_reaches_the_model_through_the_feature_builder(self, what_if, cfg):
+        baseline = what_if.forecast(cfg)
+        warmer = what_if.forecast(cfg, delta_c=5.0)
+
+        assert (warmer["temp_c"] - baseline["temp_c"]).tolist() == pytest.approx([5.0] * 24)
+        assert (warmer["load_mw"] - baseline["load_mw"]).tolist() == pytest.approx([-500.0] * 24)
+
+    def test_shifting_does_not_touch_the_recorded_history(self, what_if, cfg):
+        before = what_if.history.copy()
+
+        what_if.forecast(cfg, delta_c=5.0)
+
+        pd.testing.assert_frame_equal(what_if.history, before)

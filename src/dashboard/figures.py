@@ -213,6 +213,96 @@ def importance_figure(importance: pd.DataFrame, top_n: int = 12) -> go.Figure:
     return figure
 
 
+def hourly_error_figure(hourly: pd.DataFrame) -> go.Figure:
+    """MAPE by local hour of day for whatever hours the explorer has selected."""
+    figure = go.Figure()
+    for column, name, colour in (
+        ("model", "This model", MODEL_COLOUR),
+        ("PSE", "PSE day-ahead", PSE_COLOUR),
+    ):
+        figure.add_trace(
+            go.Scatter(
+                x=hourly.index,
+                y=hourly[column],
+                name=name,
+                mode="lines+markers",
+                line={"color": colour, "width": 2.5},
+            )
+        )
+    figure.update_layout(
+        template=TEMPLATE,
+        height=300,
+        margin={"l": 10, "r": 10, "t": 30, "b": 10},
+        yaxis_title="MAPE (%)",
+        xaxis_title="local hour of day",
+        xaxis={"dtick": 3, "range": [-0.5, 23.5]},
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.15, "x": 0},
+    )
+    return figure
+
+
+def scoreboard_figure(daily: pd.DataFrame) -> go.Figure:
+    """The daily gap to PSE: a bar below zero is a day the model won."""
+    figure = go.Figure(
+        go.Bar(
+            x=daily.index,
+            y=daily["gap"],
+            marker_color=[MODEL_COLOUR if gap < 0 else PSE_COLOUR for gap in daily["gap"]],
+            customdata=daily[["model_mape", "pse_mape"]],
+            hovertemplate=(
+                "%{x|%Y-%m-%d}<br>model %{customdata[0]:.2f}% · PSE %{customdata[1]:.2f}%"
+                "<br>gap %{y:+.2f} pp<extra></extra>"
+            ),
+        )
+    )
+    figure.add_hline(y=0, line={"color": ACTUAL_COLOUR, "width": 1})
+    figure.update_layout(
+        template=TEMPLATE,
+        height=280,
+        margin={"l": 10, "r": 10, "t": 20, "b": 10},
+        yaxis_title="model − PSE daily MAPE (pp)",
+        xaxis_title="",
+        showlegend=False,
+    )
+    return figure
+
+
+def what_if_figure(
+    baseline: pd.DataFrame, shifted: pd.DataFrame, delta_c: float, tz: str
+) -> go.Figure:
+    """The champion's forecast on the forecast weather, and on that weather shifted."""
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=baseline.index.tz_convert(tz),
+            y=baseline[ACTUAL_COLUMN],
+            name="Forecast weather",
+            mode="lines",
+            line={"color": ACTUAL_COLOUR, "width": 2, "dash": "dot"},
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=shifted.index.tz_convert(tz),
+            y=shifted[ACTUAL_COLUMN],
+            name=f"{delta_c:+g} °C",
+            mode="lines",
+            line={"color": MODEL_COLOUR, "width": 2.5},
+        )
+    )
+    figure.update_layout(
+        template=TEMPLATE,
+        height=340,
+        margin={"l": 10, "r": 10, "t": 30, "b": 10},
+        yaxis_title="MW",
+        xaxis_title=f"local time ({tz})",
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.15, "x": 0},
+    )
+    return figure
+
+
 def main() -> int:
     """Write the README images from whatever the pipelines have actually produced."""
     from loguru import logger
