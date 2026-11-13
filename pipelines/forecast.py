@@ -24,6 +24,7 @@ past.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -36,7 +37,7 @@ from src.api.champion import Champion, load_champion
 from src.config import Config, load_config, load_project_env
 from src.features.inference import features_for_targets, servable_until
 from src.ingestion.dataset import read_dataset
-from src.ingestion.entsoe_client import LOAD_COLUMN
+from src.ingestion.entsoe_client import FORECAST_COLUMN, LOAD_COLUMN
 from src.ingestion.weather_client import fetch_national_forecast
 from src.pipeline_state import PipelineState
 from src.prediction_log import PredictionLog, PredictionRecord
@@ -109,6 +110,46 @@ def _optional(value: object) -> float | None:
     return None if value is None or pd.isna(value) else round(float(value), 1)
 
 
+def publish_latest(
+    cfg: Config,
+    champion: Champion,
+    predicted: pd.DataFrame,
+    history: pd.DataFrame,
+    made_at: datetime,
+) -> None:
+    """Write the forecast just logged as JSON, for anyone who wants it without the page.
+
+    It lands in the state directory, so the snapshot the loop already pushes publishes it
+    at a stable public URL with no server behind it — a day-ahead forecast is made once a
+    day, and a file is the honest shape for that. PSE's own forecast rides along wherever
+    it has been published, because a number without its benchmark is half an answer.
+    """
+    pse = history[FORECAST_COLUMN].reindex(predicted.index)
+    hours = [
+        {
+            "target_time_utc": timestamp.isoformat(),
+            "load_mw": round(float(row["load_mw"]), 1),
+            "p10_mw": _optional(row.get("p10")),
+            "p90_mw": _optional(row.get("p90")),
+            "pse_forecast_mw": _optional(pse.loc[timestamp]),
+        }
+        for timestamp, row in predicted.iterrows()
+    ]
+    payload = {
+        "generated_at_utc": made_at.isoformat(),
+        "zone": cfg.data.country_code,
+        "model": champion.uri,
+        "run_id": champion.run_id,
+        "dataset_version": champion.dataset_version,
+        "horizon_hours": champion.horizon,
+        "hours": hours,
+    }
+    path = cfg.state.latest_forecast_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=1))
+    logger.info("Published {} hour(s) to {}", len(hours), path)
+
+
 def run(
     cfg: Config,
     *,
@@ -170,6 +211,7 @@ def run(
 
     predicted = champion.predict(features)
     logged = log.log(_records(champion, features, predicted, made_at))
+    publish_latest(cfg, champion, predicted, history, made_at)
 
     dropped = len(targets) - logged
     summary = ForecastSummary(

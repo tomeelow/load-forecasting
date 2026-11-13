@@ -93,10 +93,15 @@ then committing the result.
 
 ## What it is not
 
-The hosted page shows what the system recorded; it does not serve fresh forecasts, because
-that needs a live weather call and a model in memory. Run the stack locally with
-`docker compose up` for that. The page says as much at the top rather than implying
-otherwise.
+The hosted page shows what the system recorded; it does not serve fresh forecasts. Run the
+stack locally with `docker compose up` for that. The page says as much at the top rather
+than implying otherwise.
+
+It does hold one model in memory. The what-if panel re-runs the champion with the forecast
+temperature shifted, so `mirror_state` fetches that one booster — the one the registry
+alias points at, a few megabytes — after the first checkout has told it which that is. It
+runs on the weather the loop already ingested, makes no outside call, and logs nothing:
+the prediction log records what the system said, not what a visitor asked it.
 
 Free apps sleep after a period of inactivity and wake on the next request. **The scheduled
 retraining keeps running on GitHub Actions regardless** — the loop does not depend on where

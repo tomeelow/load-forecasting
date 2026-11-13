@@ -28,10 +28,14 @@ from src.dashboard import data
 from src.dashboard.figures import (
     drift_figure,
     forecast_figure,
+    hourly_error_figure,
     importance_figure,
     rolling_error_figure,
+    scoreboard_figure,
+    what_if_figure,
 )
 from src.dashboard.state_sync import MirrorResult, mirror_state
+from src.evaluation.metrics import segment_labels
 from src.models.baselines import NAIVE_SEASONAL, TSO_FORECAST
 
 TITLE = "Day-ahead load forecast — Polish bidding zone"
@@ -50,6 +54,20 @@ def _mirror() -> MirrorResult:
     Local runs return immediately with `enabled=False`.
     """
     return mirror_state(REPO_ROOT)
+
+
+# How far the what-if slider moves the forecast temperature, either way.
+WHAT_IF_RANGE_C = 8.0
+
+
+@st.cache_resource(ttl=3600)
+def _what_if(snapshot: str | None) -> data.WhatIf:
+    """The champion's booster, loaded once per snapshot — a resource, not data.
+
+    `st.cache_data` would pickle tens of megabytes of trees on every rerun, and a slider
+    reruns the script on every move.
+    """
+    return data.load_what_if(load_config())
 
 
 @st.cache_data(ttl=300)
@@ -87,8 +105,9 @@ def main() -> None:
             "This is a **hosted mirror**, not a live service. It shows what the daily "
             "GitHub Actions loop recorded — the dataset, the registry, the prediction log "
             "and the drift history — refreshed hourly from the state branch. It does not "
-            "serve fresh forecasts, because that needs a live weather call and a model in "
-            "memory; run the stack locally with `docker compose up` for that.",
+            "serve fresh forecasts: the what-if below re-runs the champion on the weather "
+            "the loop already ingested, and nothing it draws is logged. Run the stack "
+            "locally with `docker compose up` for the live service.",
             icon="ℹ️",
         )
 
@@ -97,7 +116,13 @@ def main() -> None:
 
     forecast_panel(cfg, card)
     st.divider()
+    what_if_panel(cfg)
+    st.divider()
     benchmark_panel(cfg)
+    st.divider()
+    explorer_panel(cfg)
+    st.divider()
+    scoreboard_panel(cfg)
     st.divider()
     drift_panel(cfg)
     st.divider()
@@ -155,7 +180,59 @@ def forecast_panel(cfg: Config, card: data.ModelCard) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 2. Model error vs PSE error — backtest, then served
+# 2. What-if: the same forecast under shifted weather
+# --------------------------------------------------------------------------------------
+
+
+def what_if_panel(cfg: Config) -> None:
+    st.subheader("What if it were warmer or colder?")
+
+    what_if = _what_if(_mirror().commit)
+    if not what_if.available:
+        st.info(f"The champion is not loaded here, so there is nothing to re-run. {what_if.error}")
+        return
+
+    baseline = what_if.forecast(cfg)
+    if baseline.empty:
+        st.info("The recorded history cannot support a forecast yet.")
+        return
+
+    delta = st.slider(
+        "Shift the forecast temperature (°C)",
+        -WHAT_IF_RANGE_C,
+        WHAT_IF_RANGE_C,
+        0.0,
+        step=0.5,
+        format="%+.1f",
+    )
+    shifted = what_if.forecast(cfg, delta)
+    change = shifted[data.ACTUAL_COLUMN] - baseline[data.ACTUAL_COLUMN]
+
+    st.plotly_chart(
+        what_if_figure(baseline, shifted, delta, cfg.data.timezone_local),
+        use_container_width=True,
+    )
+    columns = st.columns(3)
+    columns[0].metric(
+        "Mean temperature",
+        f"{shifted['temp_c'].mean():.1f} °C",
+        delta=f"{delta:+.1f} °C" if delta else None,
+        delta_color="off",
+    )
+    columns[1].metric("Mean change in demand", f"{change.mean():+,.0f} MW")
+    columns[2].metric("Largest hourly change", f"{change.loc[change.abs().idxmax()]:+,.0f} MW")
+    st.caption(
+        f"The champion re-run over the {len(baseline)} hours the loop last forecast, with "
+        "the forecast temperature moved and everything else held — through the same "
+        "feature builder training and serving use. This is the model's response, not "
+        "physics: it has seen few days far from the season's norm, so the ends of the "
+        "slider are extrapolation. Nothing here is a served prediction and none of it is "
+        "logged."
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 3. Model error vs PSE error — backtest, then served
 # --------------------------------------------------------------------------------------
 
 
@@ -264,7 +341,126 @@ def _served_note(cfg: Config, performance: data.ServedPerformance) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 3. Drift
+# 4. Backtest explorer
+# --------------------------------------------------------------------------------------
+
+# The explorer's filters: a `segment_labels` column and what the page calls it.
+EXPLORER_FILTERS = {
+    "season": "Season",
+    "daytype": "Day type",
+    "period": "Time of day",
+    "holiday": "Holidays",
+}
+
+
+def explorer_panel(cfg: Config) -> None:
+    st.subheader("Cut the backtest yourself")
+
+    backtest = _cached("load_backtest", horizon=cfg.model.horizons[0])
+    if not backtest.available:
+        st.info("No backtest predictions on disk, so there is nothing to cut.")
+        return
+
+    tz, peak_hours = cfg.data.timezone_local, cfg.evaluation.peak_hours
+    labels = segment_labels(backtest.predictions.index, tz=tz, peak_hours=peak_hours)
+    local = backtest.predictions.index.tz_convert(tz)
+    first, last = local.min().date(), local.max().date()
+
+    start, end = st.slider("Dates", first, last, (first, last), format="YYYY-MM-DD")
+    chosen = {
+        kind: picked
+        for column, (kind, label) in zip(
+            st.columns(len(EXPLORER_FILTERS)), EXPLORER_FILTERS.items(), strict=True
+        )
+        if (picked := column.multiselect(label, sorted(labels[kind].unique()), placeholder="All"))
+    }
+
+    selection = backtest.select(chosen, tz=tz, peak_hours=peak_hours, start=start, end=end)
+    if selection.predictions.empty:
+        st.info("No backtest hours match that selection.")
+        return
+
+    overall = selection.overall()
+    model, pse = overall.loc[selection.model_column], overall.loc[TSO_FORECAST]
+    gap = model["mape"] - pse["mape"]
+    columns = st.columns(4)
+    columns[0].metric("Hours selected", f"{len(selection.predictions):,}")
+    columns[1].metric("Model MAPE", f"{model['mape']:.2f}%")
+    columns[2].metric("PSE MAPE", f"{pse['mape']:.2f}%")
+    columns[3].metric(
+        "Gap (model − PSE)",
+        f"{gap:+.2f} pp",
+        delta="model behind" if gap > 0 else "model ahead",
+        delta_color="inverse" if gap > 0 else "normal",
+    )
+
+    left, right = st.columns([2, 1])
+    left.plotly_chart(hourly_error_figure(selection.hourly_mape(tz)), use_container_width=True)
+    right.dataframe(
+        overall.rename(
+            index={
+                selection.model_column: "This model",
+                TSO_FORECAST: "PSE",
+                NAIVE_SEASONAL: "Naive",
+            },
+            columns={
+                "mape": "MAPE %",
+                "rmse_mw": "RMSE MW",
+                "mae_mw": "MAE MW",
+                "bias_mw": "Bias MW",
+            },
+        )[["MAPE %", "RMSE MW", "MAE MW", "Bias MW"]]
+        .style.format("{:.2f}", subset=["MAPE %"])
+        .format("{:+.0f}", subset=["Bias MW"])
+        .format("{:.0f}", subset=["RMSE MW", "MAE MW"]),
+        use_container_width=True,
+    )
+    st.caption(
+        "Every figure is recomputed from the audited out-of-sample predictions for the "
+        "hours selected, model and PSE on identical hours. A cut is a cut: the reportable "
+        "number is the whole year above, and a selection of a few hundred hours can be "
+        "made to say most things."
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 5. Daily scoreboard — served evidence, one day at a time
+# --------------------------------------------------------------------------------------
+
+
+def scoreboard_panel(cfg: Config) -> None:
+    st.subheader("Daily scoreboard")
+
+    daily = _cached("load_served_performance").daily(cfg.data.timezone_local)
+    if daily.empty:
+        st.info(
+            "No complete day has been scored yet. A day appears here once ENTSO-E has "
+            "published the actual for every hour of it."
+        )
+        return
+
+    latest = daily.iloc[-1]
+    won = int((daily["gap"] < 0).sum())
+    columns = st.columns(3)
+    columns[0].metric(f"Model, {daily.index[-1]:%Y-%m-%d}", f"{latest['model_mape']:.2f}%")
+    columns[1].metric(
+        "PSE, same day",
+        f"{latest['pse_mape']:.2f}%",
+        delta="model behind" if latest["gap"] > 0 else "model ahead",
+        delta_color="inverse" if latest["gap"] > 0 else "normal",
+    )
+    columns[2].metric("Days the model beat PSE", f"{won} of {len(daily)}")
+
+    st.plotly_chart(scoreboard_figure(daily), use_container_width=True)
+    st.caption(
+        "Served forecasts only, scored against published actuals — one bar per complete "
+        "local day, below zero where the model's MAPE was lower than PSE's. One day is 24 "
+        "hours and proves little either way; the tally is the part worth reading."
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 6. Drift
 # --------------------------------------------------------------------------------------
 
 
@@ -315,7 +511,7 @@ def drift_panel(cfg: Config) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 4. Feature importance
+# 7. Feature importance
 # --------------------------------------------------------------------------------------
 
 
@@ -334,7 +530,7 @@ def importance_panel(card: data.ModelCard) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 5. Model card
+# 8. Model card
 # --------------------------------------------------------------------------------------
 
 

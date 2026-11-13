@@ -16,15 +16,17 @@ lets the page decide what to say about it.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
-from datetime import datetime
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 from loguru import logger
 
 from src.config import Config
-from src.evaluation.metrics import mape, metrics_by_segment, point_metrics
+from src.evaluation.metrics import mape, metrics_by_segment, point_metrics, segment_labels
+from src.features.inference import features_for_targets, servable_until
 from src.ingestion.dataset import read_dataset
 from src.models.baselines import TSO_FORECAST
 from src.prediction_log import PredictionLog
@@ -34,6 +36,10 @@ TSO_COLUMN = "tso_forecast_mw"
 
 BACKTEST_MODEL = "lgbm_weather_tuned"
 AUDIT_MODEL = "lgbm_gate_closure"
+
+# A local day the scoreboard will call: 23 hours is the shortest one there is (the spring
+# DST change), so anything below it is a day still waiting on actuals, not a short day.
+FULL_DAY_HOURS = 23
 
 
 @dataclass(frozen=True)
@@ -95,6 +101,30 @@ class ServedPerformance:
             return "empty"
         return "measuring" if self.sufficient else "accumulating"
 
+    def daily(self, tz: str) -> pd.DataFrame:
+        """One row per complete local day: the model's MAPE, PSE's, and the gap.
+
+        Only hours that carry both forecasts count, so the two are compared on identical
+        hours, and only days with every hour scored — a day called on its first six hours
+        would be called again, differently, once the rest arrived.
+        """
+        columns = ["model_mape", "pse_mape", "gap", "hours"]
+        both = self.scored.dropna(subset=["tso_mw"]) if not self.scored.empty else self.scored
+        if both.empty:
+            return pd.DataFrame(columns=columns)
+
+        ape = pd.DataFrame(
+            {
+                "model_mape": both["ape"] * 100,
+                "pse_mape": (both["tso_mw"] - both["actual_mw"]).abs() / both["actual_mw"] * 100,
+            }
+        )
+        by_day = ape.groupby(ape.index.tz_convert(tz).date)
+        daily = by_day.mean()
+        daily["hours"] = by_day.size()
+        daily["gap"] = daily["model_mape"] - daily["pse_mape"]
+        return daily.loc[daily["hours"] >= FULL_DAY_HOURS, columns]
+
 
 @dataclass(frozen=True)
 class BacktestEvidence:
@@ -133,6 +163,43 @@ class BacktestEvidence:
         )
         return frame.rolling(window, min_periods=window // 2).mean().dropna()
 
+    def select(
+        self,
+        segments: Mapping[str, Collection[str]],
+        *,
+        tz: str,
+        peak_hours: tuple[int, int],
+        start: date | None = None,
+        end: date | None = None,
+    ) -> BacktestEvidence:
+        """The same evidence restricted to some hours, for the explorer.
+
+        `segments` maps a `segment_labels` column to the labels to keep, so the cuts on
+        offer are exactly the ones the evaluation reports — the page cannot invent a
+        segment the audit does not have. Dates are local and inclusive.
+        """
+        labels = segment_labels(self.predictions.index, tz=tz, peak_hours=peak_hours)
+        keep = pd.Series(True, index=labels.index)
+        for kind, wanted in segments.items():
+            keep &= labels[kind].isin(wanted)
+        local_date = pd.Series(labels.index.tz_convert(tz).date, index=labels.index)
+        if start is not None:
+            keep &= local_date >= start
+        if end is not None:
+            keep &= local_date <= end
+        return replace(self, predictions=self.predictions[keep.to_numpy()])
+
+    def hourly_mape(self, tz: str) -> pd.DataFrame:
+        """MAPE by local hour of day, model and PSE on the same hours."""
+        actual = self.predictions["actual"]
+        frame = pd.DataFrame(
+            {
+                "model": (self.predictions[self.model_column] - actual).abs() / actual * 100,
+                "PSE": (self.predictions[TSO_FORECAST] - actual).abs() / actual * 100,
+            }
+        )
+        return frame.groupby(frame.index.tz_convert(tz).hour).mean()
+
     def by_segment(self, peak_hours: tuple[int, int]) -> pd.DataFrame:
         segments = metrics_by_segment(
             self.predictions["actual"],
@@ -144,6 +211,93 @@ class BacktestEvidence:
         ).reset_index()
         wide["gap"] = wide[self.model_column] - wide[TSO_FORECAST]
         return wide.sort_values("gap", ascending=False).reset_index(drop=True)
+
+
+@dataclass(frozen=True)
+class WhatIf:
+    """The champion and the frame it forecasts from, for re-predicting under other weather.
+
+    Nothing this produces is a served prediction, and none of it is logged: the prediction
+    log records what the system said about tomorrow, and a visitor dragging a slider is
+    not the system saying anything.
+    """
+
+    booster: object | None = None  # lightgbm.Booster
+    horizon: int | None = None
+    history: pd.DataFrame = field(default_factory=pd.DataFrame)
+    error: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.booster is not None and self.horizon is not None and not self.history.empty
+
+    def forecast(self, cfg: Config, delta_c: float = 0.0) -> pd.DataFrame:
+        """The champion's forecast with the forecast temperature moved by `delta_c`.
+
+        Same hours the loop forecasts, same `features_for_targets` it uses — the shift is
+        applied to the raw temperature and every feature derived from it follows, rather
+        than being patched into a finished feature row by a second implementation.
+        """
+        latest = self.history[ACTUAL_COLUMN].last_valid_index()
+        if latest is None:
+            return pd.DataFrame(columns=[ACTUAL_COLUMN, "temp_c"])
+        targets = pd.date_range(
+            latest + pd.Timedelta(hours=1), servable_until(self.history, self.horizon), freq="1h"
+        )
+        shifted = self.history.copy()
+        shifted.loc[targets[0] :, "temp_c"] += delta_c
+        features = features_for_targets(
+            shifted,
+            pd.DataFrame(),
+            self.horizon,
+            targets,
+            rolling_window=cfg.features.rolling_window_hours,
+            weekly_lag=cfg.features.weekly_lag_hours,
+            tz=cfg.data.timezone_local,
+        )
+        return pd.DataFrame(
+            {
+                ACTUAL_COLUMN: self.booster.predict(features[self.booster.feature_name()]),
+                "temp_c": features["temp_c"],
+            },
+            index=features.index,
+        )
+
+
+MODEL_FILE = "model.lgb"
+
+
+def load_what_if(cfg: Config) -> WhatIf:
+    """The champion's booster and the dataset, or the reason there is nothing to play with.
+
+    The booster is found by model id inside the local store rather than through
+    `models:/name@champion`, for the reason `_load_importance` gives: MLflow records an
+    absolute artifact path, and on a mirror that path belongs to a CI runner.
+    """
+    try:
+        import lightgbm
+        import mlflow
+        from mlflow.tracking import MlflowClient
+
+        mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
+        client = MlflowClient()
+        version = client.get_model_version_by_alias(
+            cfg.mlflow.registered_model_name, cfg.mlflow.champion_alias
+        )
+        horizon = int(client.get_run(version.run_id).data.params.get("horizon_hours", 0))
+        model_id = version.source.removeprefix("models:/")
+        root = _store_root(cfg.mlflow.tracking_uri)
+        paths = sorted(root.glob(f"*/models/{model_id}/artifacts/{MODEL_FILE}")) if root else []
+        if not paths or horizon < 1:
+            return WhatIf(error="the champion's booster is not on disk")
+        return WhatIf(
+            booster=lightgbm.Booster(model_file=str(paths[0])),
+            horizon=horizon,
+            history=read_dataset(cfg.data.dataset_path),
+        )
+    except Exception as exc:  # noqa: BLE001 — reported on the page, never raised
+        logger.warning("Dashboard could not load the champion for the what-if: {}", exc)
+        return WhatIf(error=f"{type(exc).__name__}: {exc}")
 
 
 def load_model_card(cfg: Config) -> ModelCard:

@@ -11,6 +11,7 @@ rather than a stub of it.
 
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -93,6 +94,44 @@ def test_it_leaves_the_boosters_on_the_branch(tmp_path, state_remote):
     assert (destination / "mlruns" / "mlflow.db").exists()
     assert (destination / "mlruns" / "1" / "abc" / "artifacts" / "feature_importance.json").exists()
     assert not list(destination.glob("mlruns/**/*.lgb"))
+
+
+def test_it_fetches_the_one_booster_the_registry_alias_points_at(tmp_path):
+    """The what-if panel re-runs the champion, so the champion's booster has to arrive.
+
+    Only that one: the branch carries every retained run's model, and the rest are still
+    the reason the whole branch cannot be cloned inside the timeout.
+    """
+    work = tmp_path / "work"
+    work.mkdir()
+    git("init", "-q", "-b", STATE_BRANCH, cwd=work)
+    git("config", "user.email", "test@example.com", cwd=work)
+    git("config", "user.name", "test", cwd=work)
+    for relative in (
+        "state/predictions.db",
+        "mlruns/1/models/m-champion/artifacts/model.lgb",
+        "mlruns/1/models/m-retired/artifacts/model.lgb",
+    ):
+        path = work / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("tree\n")
+    with sqlite3.connect(work / "mlruns" / "mlflow.db") as registry:
+        registry.executescript(
+            """CREATE TABLE model_versions (name TEXT, version INTEGER, source TEXT);
+               CREATE TABLE registered_model_aliases (alias TEXT, version INTEGER, name TEXT);
+               INSERT INTO model_versions VALUES ('pl', 1, 'models:/m-retired');
+               INSERT INTO model_versions VALUES ('pl', 2, 'models:/m-champion');
+               INSERT INTO registered_model_aliases VALUES ('champion', 2, 'pl');"""
+        )
+    registry.close()
+    git("add", "-A", cwd=work)
+    git("commit", "-q", "-m", "state snapshot", cwd=work)
+
+    destination = tmp_path / "app"
+    result = mirror_state(destination, str(work))
+
+    assert result.ok
+    assert [p.parent.parent.name for p in destination.glob("mlruns/**/*.lgb")] == ["m-champion"]
 
 
 def test_it_reports_which_snapshot_it_got(tmp_path, state_remote):
