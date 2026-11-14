@@ -103,6 +103,8 @@ alias points at, a few megabytes — after the first checkout has told it which 
 runs on the weather the loop already ingested, makes no outside call, and logs nothing:
 the prediction log records what the system said, not what a visitor asked it.
 
-Free apps sleep after a period of inactivity and wake on the next request. **The scheduled
+Free apps sleep after 12 hours without a visitor and make the next one wait through a cold
+start. The `keep-awake` workflow opens the page in a headless browser every 4 hours so that
+does not happen, and presses the wake button if it ever does. **The scheduled
 retraining keeps running on GitHub Actions regardless** — the loop does not depend on where
 the dashboard is hosted, which is the point of ADR-008's state branch.

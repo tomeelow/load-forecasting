@@ -1,0 +1,39 @@
+name: keep-awake
+
+# Streamlit Community Cloud puts an app to sleep after 12 hours without a visitor, and the
+# next person to open it waits through a cold start. This visits the dashboard in a real
+# browser often enough that it never gets there — see deploy/keep_awake.py for why a curl
+# would not do. Nothing in the pipeline depends on it: the daily loop runs regardless.
+
+on:
+  schedule:
+    # Every 4 hours. GitHub's cron is best-effort, so this leaves room for two delayed or
+    # dropped runs in a row before the 12-hour limit is reached.
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keep-awake
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DASHBOARD_URL: https://pl-load-forecast.streamlit.app
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Install the browser
+        # Same version as the script pins, or the browser build will not match.
+        run: uvx playwright==1.65.2 install --with-deps chromium-headless-shell
+
+      - name: Visit the dashboard
+        run: uv run deploy/keep_awake.py "$DASHBOARD_URL"
