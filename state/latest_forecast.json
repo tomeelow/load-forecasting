@@ -1,0 +1,178 @@
+{
+ "generated_at_utc": "2026-11-14T12:29:43.836485+00:00",
+ "zone": "PL",
+ "model": "pl_load_lgbm/80",
+ "run_id": "b072cd4a234c466cb7a9ff9f1095aa47",
+ "dataset_version": "54b3f5662eb4",
+ "horizon_hours": 24,
+ "hours": [
+  {
+   "target_time_utc": "2026-11-14T12:00:00+00:00",
+   "load_mw": 20444.9,
+   "p10_mw": 19824.6,
+   "p90_mw": 20974.1,
+   "pse_forecast_mw": 19700.0
+  },
+  {
+   "target_time_utc": "2026-11-14T13:00:00+00:00",
+   "load_mw": 20408.1,
+   "p10_mw": 19916.5,
+   "p90_mw": 20916.8,
+   "pse_forecast_mw": 19700.0
+  },
+  {
+   "target_time_utc": "2026-11-14T14:00:00+00:00",
+   "load_mw": 20447.1,
+   "p10_mw": 20049.6,
+   "p90_mw": 20868.4,
+   "pse_forecast_mw": 19925.0
+  },
+  {
+   "target_time_utc": "2026-11-14T15:00:00+00:00",
+   "load_mw": 20764.4,
+   "p10_mw": 20393.9,
+   "p90_mw": 21158.6,
+   "pse_forecast_mw": 20475.0
+  },
+  {
+   "target_time_utc": "2026-11-14T16:00:00+00:00",
+   "load_mw": 20741.4,
+   "p10_mw": 20536.6,
+   "p90_mw": 21129.8,
+   "pse_forecast_mw": 20487.5
+  },
+  {
+   "target_time_utc": "2026-11-14T17:00:00+00:00",
+   "load_mw": 20424.4,
+   "p10_mw": 20283.5,
+   "p90_mw": 20989.3,
+   "pse_forecast_mw": 20325.0
+  },
+  {
+   "target_time_utc": "2026-11-14T18:00:00+00:00",
+   "load_mw": 20246.9,
+   "p10_mw": 20011.5,
+   "p90_mw": 20724.9,
+   "pse_forecast_mw": 20050.0
+  },
+  {
+   "target_time_utc": "2026-11-14T19:00:00+00:00",
+   "load_mw": 19516.4,
+   "p10_mw": 19411.3,
+   "p90_mw": 20215.1,
+   "pse_forecast_mw": 19562.5
+  },
+  {
+   "target_time_utc": "2026-11-14T20:00:00+00:00",
+   "load_mw": 18750.5,
+   "p10_mw": 18372.3,
+   "p90_mw": 19306.9,
+   "pse_forecast_mw": 18525.0
+  },
+  {
+   "target_time_utc": "2026-11-14T21:00:00+00:00",
+   "load_mw": 17830.3,
+   "p10_mw": 17462.8,
+   "p90_mw": 18320.6,
+   "pse_forecast_mw": 17475.0
+  },
+  {
+   "target_time_utc": "2026-11-14T22:00:00+00:00",
+   "load_mw": 16723.5,
+   "p10_mw": 16363.4,
+   "p90_mw": 17031.5,
+   "pse_forecast_mw": 16275.0
+  },
+  {
+   "target_time_utc": "2026-11-14T23:00:00+00:00",
+   "load_mw": 15815.8,
+   "p10_mw": 15487.7,
+   "p90_mw": 16167.9,
+   "pse_forecast_mw": 15687.5
+  },
+  {
+   "target_time_utc": "2026-11-15T00:00:00+00:00",
+   "load_mw": 15354.6,
+   "p10_mw": 14967.6,
+   "p90_mw": 15723.6,
+   "pse_forecast_mw": 15262.5
+  },
+  {
+   "target_time_utc": "2026-11-15T01:00:00+00:00",
+   "load_mw": 15062.9,
+   "p10_mw": 14754.1,
+   "p90_mw": 15303.2,
+   "pse_forecast_mw": 15150.0
+  },
+  {
+   "target_time_utc": "2026-11-15T02:00:00+00:00",
+   "load_mw": 14871.3,
+   "p10_mw": 14500.9,
+   "p90_mw": 15225.8,
+   "pse_forecast_mw": 15150.0
+  },
+  {
+   "target_time_utc": "2026-11-15T03:00:00+00:00",
+   "load_mw": 14949.0,
+   "p10_mw": 14717.5,
+   "p90_mw": 15274.0,
+   "pse_forecast_mw": 15162.5
+  },
+  {
+   "target_time_utc": "2026-11-15T04:00:00+00:00",
+   "load_mw": 15374.8,
+   "p10_mw": 14900.1,
+   "p90_mw": 15615.4,
+   "pse_forecast_mw": 15587.5
+  },
+  {
+   "target_time_utc": "2026-11-15T05:00:00+00:00",
+   "load_mw": 15452.1,
+   "p10_mw": 15117.8,
+   "p90_mw": 15932.5,
+   "pse_forecast_mw": 16150.0
+  },
+  {
+   "target_time_utc": "2026-11-15T06:00:00+00:00",
+   "load_mw": 15945.7,
+   "p10_mw": 15691.5,
+   "p90_mw": 16416.2,
+   "pse_forecast_mw": 16925.0
+  },
+  {
+   "target_time_utc": "2026-11-15T07:00:00+00:00",
+   "load_mw": 16618.2,
+   "p10_mw": 16294.7,
+   "p90_mw": 16963.2,
+   "pse_forecast_mw": 17437.5
+  },
+  {
+   "target_time_utc": "2026-11-15T08:00:00+00:00",
+   "load_mw": 17087.7,
+   "p10_mw": 16792.9,
+   "p90_mw": 17662.1,
+   "pse_forecast_mw": 17450.0
+  },
+  {
+   "target_time_utc": "2026-11-15T09:00:00+00:00",
+   "load_mw": 17410.1,
+   "p10_mw": 17154.6,
+   "p90_mw": 17994.0,
+   "pse_forecast_mw": 17450.0
+  },
+  {
+   "target_time_utc": "2026-11-15T10:00:00+00:00",
+   "load_mw": 17480.7,
+   "p10_mw": 17317.2,
+   "p90_mw": 18047.3,
+   "pse_forecast_mw": 17525.0
+  },
+  {
+   "target_time_utc": "2026-11-15T11:00:00+00:00",
+   "load_mw": 17597.5,
+   "p10_mw": 17433.9,
+   "p90_mw": 18265.1,
+   "pse_forecast_mw": 17725.0
+  }
+ ]
+}
