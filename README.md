@@ -1,5 +1,11 @@
 # Day-Ahead Electricity Load Forecasting — Polish Bidding Zone
 
+[![ci](https://github.com/tomeelow/load-forecasting/actions/workflows/ci.yml/badge.svg)](https://github.com/tomeelow/load-forecasting/actions/workflows/ci.yml)
+[![daily-loop](https://github.com/tomeelow/load-forecasting/actions/workflows/daily-loop.yml/badge.svg)](https://github.com/tomeelow/load-forecasting/actions/workflows/daily-loop.yml)
+![python](https://img.shields.io/badge/python-3.12-blue)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://pl-load-forecast.streamlit.app)
+
 Hourly forecasts of how much electricity Poland will use tomorrow, benchmarked against
 the grid operator's own published forecast.
 
@@ -37,6 +43,23 @@ An earlier version of this README claimed a 0.71 pp win. That number came from t
 year in the data, a horizon that did not match PSE's, and weather nobody had at forecast
 time. [The audit that found it](docs/evaluation_notes.md) is the most useful document
 here.
+
+## At a glance
+
+| | |
+|---|---|
+| **Problem** | Forecast Poland's hourly electricity demand for the next day, at the grid operator's own deadline |
+| **Benchmark** | PSE's published day-ahead forecast, the operational number the market clears on, scored on the same **8,736 out-of-sample hours** |
+| **Result** | 2.64% MAPE against PSE's 2.35% over the latest year: behind overall, ahead in spring and summer, and 2× better than a seasonal-naive baseline (5.76%) |
+| **MLOps loop** | Runs every day on GitHub Actions: ingest → validate (pandera) → score yesterday → drift check (Evidently) → retrain if needed → gated promotion (MLflow registry) → forecast |
+| **Leakage control** | One feature builder shared by training and serving, every load lag ≥ the horizon, a 24 h embargo between train and test blocks, and tests that enforce all three |
+| **Serving** | FastAPI (`/forecast`, `/health`, `/reload-model`), a Streamlit dashboard, and the latest forecast published as JSON |
+| **Engineering** | 450+ offline tests (HTTP blocked at the transport), Docker Compose, ten ADRs, and everything on free tiers |
+
+**What it shows about how I work:** an earlier version of this README claimed the model
+beat PSE. I audited my own benchmark, found it wasn't like-for-like, and published the
+corrected number, which is a loss. Fair comparisons with honest results matter more to
+me than headline numbers.
 
 ---
 
@@ -628,3 +651,9 @@ hours — the last of which is what turned a claimed win into the loss reported 
 Two documents sit alongside them:
 [`docs/evaluation_notes.md`](docs/evaluation_notes.md), the audit of whether the PSE
 comparison is fair, and [`docs/blog.md`](docs/blog.md).
+
+## License
+
+The code is released under the [MIT License](LICENSE). Load data and PSE's forecasts come
+from the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) and weather from
+[Open-Meteo](https://open-meteo.com/), under their own terms.
