@@ -1,0 +1,47 @@
+artifact_path: /home/runner/work/load-forecasting/load-forecasting/mlruns/1/models/m-2c953af715e942af9d36994a8bb7dd22/artifacts
+flavors:
+  lightgbm:
+    code: null
+    data: model.lgb
+    lgb_version: 4.7.0
+    model_class: lightgbm.basic.Booster
+    serialization_format: skops
+    skops_trusted_types:
+    - lightgbm.basic.Booster
+    - lightgbm.sklearn.LGBMRegressor
+    - collections.OrderedDict
+    - lightgbm.sklearn.LGBMClassifier
+  python_function:
+    data: model.lgb
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.lightgbm
+    python_version: 3.12.3
+is_signature_from_type_hint: false
+mlflow_version: 3.15.1
+model_id: m-2c953af715e942af9d36994a8bb7dd22
+model_size_bytes: 6208659
+model_uuid: m-2c953af715e942af9d36994a8bb7dd22
+prompts: null
+run_id: 94f8f8e4e3554d839ca3a882771f0af0
+signature:
+  inputs: '[{"type": "double", "name": "hour", "required": true}, {"type": "double",
+    "name": "dow", "required": true}, {"type": "double", "name": "month", "required":
+    true}, {"type": "double", "name": "is_weekend", "required": true}, {"type": "double",
+    "name": "is_holiday", "required": true}, {"type": "double", "name": "hour_sin",
+    "required": true}, {"type": "double", "name": "hour_cos", "required": true}, {"type":
+    "double", "name": "dow_sin", "required": true}, {"type": "double", "name": "dow_cos",
+    "required": true}, {"type": "double", "name": "load_lag_24", "required": true},
+    {"type": "double", "name": "load_lag_25", "required": true}, {"type": "double",
+    "name": "load_lag_48", "required": true}, {"type": "double", "name": "load_lag_168",
+    "required": true}, {"type": "double", "name": "load_lag_192", "required": true},
+    {"type": "double", "name": "load_roll_mean_24", "required": true}, {"type": "double",
+    "name": "load_roll_std_24", "required": true}, {"type": "double", "name": "temp_c",
+    "required": true}, {"type": "double", "name": "temp_sq", "required": true}, {"type":
+    "double", "name": "wind_ms", "required": true}, {"type": "double", "name": "cloud_cover",
+    "required": true}]'
+  outputs: '[{"type": "double", "name": "prediction", "required": true}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-09-05 09:17:04.720196'
